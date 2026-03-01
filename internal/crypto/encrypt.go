@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	gocrypto "crypto"
 	"fmt"
 	"io"
 
@@ -22,6 +23,7 @@ func Encrypt(plaintext io.Reader, params EncryptParams) ([]byte, error) {
 	}
 
 	cfg := &packet.Config{
+		DefaultHash:   gocrypto.SHA256,
 		DefaultCipher: packet.CipherAES256,
 	}
 
@@ -64,6 +66,7 @@ func Encrypt(plaintext io.Reader, params EncryptParams) ([]byte, error) {
 // EncryptSymmetric encrypts data with a passphrase (symmetric encryption).
 func EncryptSymmetric(plaintext io.Reader, passphrase []byte, useArmor bool) ([]byte, error) {
 	cfg := &packet.Config{
+		DefaultHash:   gocrypto.SHA256,
 		DefaultCipher: packet.CipherAES256,
 	}
 

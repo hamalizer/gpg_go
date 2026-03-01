@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	gocrypto "crypto"
 	"fmt"
 	"io"
 
@@ -28,7 +29,9 @@ func Sign(data io.Reader, params SignParams) ([]byte, error) {
 		return nil, fmt.Errorf("private key required for signing")
 	}
 
-	cfg := &packet.Config{}
+	cfg := &packet.Config{
+		DefaultHash: gocrypto.SHA256,
+	}
 
 	if params.Cleartext {
 		return cleartextSignMsg(data, params.Signer, cfg)

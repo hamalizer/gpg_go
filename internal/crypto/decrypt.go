@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -89,5 +88,7 @@ func Decrypt(ciphertext io.Reader, keyring openpgp.KeyRing, passphrase []byte) (
 }
 
 func isArmored(data []byte) bool {
-	return strings.Contains(string(data[:min(len(data), 100)]), "-----BEGIN PGP")
+	// Trim leading whitespace/newlines, then check for armor header prefix.
+	trimmed := bytes.TrimLeft(data[:min(len(data), 100)], " \t\r\n")
+	return bytes.HasPrefix(trimmed, []byte("-----BEGIN PGP"))
 }

@@ -94,13 +94,15 @@ func VerifyInline(signedMsg io.Reader, keyring openpgp.KeyRing) (*VerifyResult, 
 
 	if md.SignatureError != nil {
 		result.Message = fmt.Sprintf("BAD signature: %v", md.SignatureError)
-	} else {
-		result.Message = "Good signature"
-		if md.SignedBy != nil && md.SignedBy.Entity != nil {
-			for _, id := range md.SignedBy.Entity.Identities {
-				result.Message = fmt.Sprintf("Good signature from \"%s\"", id.Name)
-				break
-			}
+		// Do not return plaintext when signature verification fails.
+		return result, nil, nil
+	}
+
+	result.Message = "Good signature"
+	if md.SignedBy != nil && md.SignedBy.Entity != nil {
+		for _, id := range md.SignedBy.Entity.Identities {
+			result.Message = fmt.Sprintf("Good signature from \"%s\"", id.Name)
+			break
 		}
 	}
 

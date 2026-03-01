@@ -7,6 +7,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
@@ -30,7 +31,7 @@ func Sign(data io.Reader, params SignParams) ([]byte, error) {
 	cfg := &packet.Config{}
 
 	if params.Cleartext {
-		return cleartextSign(data, params.Signer, cfg)
+		return cleartextSignMsg(data, params.Signer, cfg)
 	}
 
 	if params.Detached {
@@ -56,8 +57,7 @@ func detachedSign(data io.Reader, signer *openpgp.Entity, useArmor bool, cfg *pa
 	return buf.Bytes(), nil
 }
 
-func cleartextSign(data io.Reader, signer *openpgp.Entity, cfg *packet.Config) ([]byte, error) {
-	// Read all data first
+func cleartextSignMsg(data io.Reader, signer *openpgp.Entity, cfg *packet.Config) ([]byte, error) {
 	plaintext, err := io.ReadAll(data)
 	if err != nil {
 		return nil, fmt.Errorf("read data: %w", err)
@@ -65,24 +65,24 @@ func cleartextSign(data io.Reader, signer *openpgp.Entity, cfg *packet.Config) (
 
 	var buf bytes.Buffer
 
-	// Create a cleartext signed message
-	// Header + body + signature
-	buf.WriteString("-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA256\n\n")
-	buf.Write(plaintext)
-	buf.WriteString("\n")
-
-	// Generate detached signature
-	var sigBuf bytes.Buffer
-	if err := openpgp.ArmoredDetachSign(&sigBuf, signer, bytes.NewReader(plaintext), cfg); err != nil {
-		return nil, fmt.Errorf("sign: %w", err)
+	// Use the proper clearsign package which handles dash-escaping,
+	// hash headers, and line ending normalization per RFC 4880 Section 7.
+	w, err := clearsign.Encode(&buf, signer.PrivateKey, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("clearsign encode: %w", err)
 	}
-	buf.Write(sigBuf.Bytes())
+	if _, err := w.Write(plaintext); err != nil {
+		w.Close()
+		return nil, fmt.Errorf("write cleartext body: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("close clearsign: %w", err)
+	}
 
 	return buf.Bytes(), nil
 }
 
 func inlineSign(data io.Reader, params SignParams, cfg *packet.Config) ([]byte, error) {
-	// For inline signing, we encrypt to no one but sign
 	plaintext, err := io.ReadAll(data)
 	if err != nil {
 		return nil, fmt.Errorf("read data: %w", err)
@@ -93,7 +93,6 @@ func inlineSign(data io.Reader, params SignParams, cfg *packet.Config) ([]byte, 
 	var armorWriter io.WriteCloser
 
 	if params.Armor {
-		var err error
 		armorWriter, err = armor.Encode(&output, "PGP MESSAGE", nil)
 		if err != nil {
 			return nil, fmt.Errorf("armor encode: %w", err)
@@ -101,7 +100,6 @@ func inlineSign(data io.Reader, params SignParams, cfg *packet.Config) ([]byte, 
 		writeTarget = armorWriter
 	}
 
-	// Sign-only message: encrypt to empty recipient list with signer
 	w, err := openpgp.Sign(writeTarget, params.Signer, nil, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("sign: %w", err)

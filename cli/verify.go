@@ -9,6 +9,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// errBadSignature is returned when signature verification fails.
+// The caller (Execute) can check for this to set exit code 1.
+var errBadSignature = fmt.Errorf("signature verification failed")
+
 func newVerifyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "verify <signature> [signed-file]",
@@ -17,14 +21,11 @@ func newVerifyCmd() *cobra.Command {
 
 For detached signatures: gpg-go verify signature.sig file.txt
 For inline signatures:   gpg-go verify signed-message.gpg`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				return fmt.Errorf("signature file required")
-			}
-
 			allKeys := kr.AllKeys()
 
-			if len(args) >= 2 {
+			if len(args) == 2 {
 				// Detached signature verification
 				sigData, err := os.ReadFile(args[0])
 				if err != nil {
@@ -45,9 +46,9 @@ For inline signatures:   gpg-go verify signed-message.gpg`,
 					return err
 				}
 
-				fmt.Println(result.Message)
+				fmt.Fprintln(os.Stderr, result.Message)
 				if !result.Valid {
-					os.Exit(1)
+					return errBadSignature
 				}
 				return nil
 			}
@@ -68,7 +69,7 @@ For inline signatures:   gpg-go verify signed-message.gpg`,
 
 			fmt.Fprintln(os.Stderr, result.Message)
 			if !result.Valid {
-				os.Exit(1)
+				return errBadSignature
 			}
 
 			if len(plaintext) > 0 {

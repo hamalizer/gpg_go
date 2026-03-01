@@ -30,27 +30,35 @@ func newGenerateCmd() *cobra.Command {
 				reader := bufio.NewReader(os.Stdin)
 
 				if name == "" {
-					fmt.Print("Real name: ")
-					name, _ = reader.ReadString('\n')
+					fmt.Fprint(os.Stderr, "Real name: ")
+					var err error
+					name, err = reader.ReadString('\n')
+					if err != nil {
+						return fmt.Errorf("read name: %w", err)
+					}
 					name = strings.TrimSpace(name)
 				}
 				if email == "" {
-					fmt.Print("Email address: ")
-					email, _ = reader.ReadString('\n')
+					fmt.Fprint(os.Stderr, "Email address: ")
+					var err error
+					email, err = reader.ReadString('\n')
+					if err != nil {
+						return fmt.Errorf("read email: %w", err)
+					}
 					email = strings.TrimSpace(email)
 				}
 				if comment == "" {
-					fmt.Print("Comment (optional): ")
+					fmt.Fprint(os.Stderr, "Comment (optional): ")
 					comment, _ = reader.ReadString('\n')
 					comment = strings.TrimSpace(comment)
 				}
 				if algo == "" {
-					fmt.Println("\nAlgorithm options:")
-					fmt.Println("  1) Ed25519 (recommended, fast, modern)")
-					fmt.Println("  2) RSA-4096 (traditional, widely compatible)")
-					fmt.Println("  3) RSA-3072")
-					fmt.Println("  4) RSA-2048")
-					fmt.Print("Your selection (default: 1): ")
+					fmt.Fprintln(os.Stderr, "\nAlgorithm options:")
+					fmt.Fprintln(os.Stderr, "  1) Ed25519 (recommended, fast, modern)")
+					fmt.Fprintln(os.Stderr, "  2) RSA-4096 (traditional, widely compatible)")
+					fmt.Fprintln(os.Stderr, "  3) RSA-3072")
+					fmt.Fprintln(os.Stderr, "  4) RSA-2048")
+					fmt.Fprint(os.Stderr, "Your selection (default: 1): ")
 					choice, _ := reader.ReadString('\n')
 					choice = strings.TrimSpace(choice)
 					switch choice {
@@ -66,6 +74,11 @@ func newGenerateCmd() *cobra.Command {
 						algo = "ed25519"
 					}
 				}
+			}
+
+			// Default algo when --quick and no --algo specified
+			if algo == "" {
+				algo = "ed25519"
 			}
 
 			if name == "" || email == "" {
@@ -99,7 +112,8 @@ func newGenerateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "real name for the key")
 	cmd.Flags().StringVar(&email, "email", "", "email address for the key")
 	cmd.Flags().StringVar(&comment, "comment", "", "comment for the key")
-	cmd.Flags().StringVar(&algo, "algo", "ed25519", "algorithm: ed25519, rsa4096, rsa3072, rsa2048")
+	// No default -- empty means "prompt in interactive mode" or "default to ed25519 in quick mode"
+	cmd.Flags().StringVar(&algo, "algo", "", "algorithm: ed25519, rsa4096, rsa3072, rsa2048")
 	cmd.Flags().BoolVar(&quick, "quick", false, "skip interactive prompts (requires --name and --email)")
 
 	return cmd

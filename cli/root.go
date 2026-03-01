@@ -83,7 +83,7 @@ func Execute() {
 
 func writeOutput(data []byte) error {
 	if outputFile != "" {
-		return os.WriteFile(outputFile, data, 0644)
+		return os.WriteFile(outputFile, data, 0600)
 	}
 	_, err := os.Stdout.Write(data)
 	return err

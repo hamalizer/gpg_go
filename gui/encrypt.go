@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/hamalizer/gpg_go/internal/crypto"
+	"github.com/hamalizer/gpg_go/internal/keyring"
 )
 
 func (a *App) buildEncryptTab() fyne.CanvasObject {
@@ -39,12 +40,24 @@ func (a *App) buildEncryptTab() fyne.CanvasObject {
 		}
 
 		var recipients []*openpgp.Entity
+		var notFound []string
 		for _, sel := range recipientSelect.Selected {
 			keyID := extractKeyID(sel)
 			entity := a.kr.FindPublicKey(keyID)
 			if entity != nil {
 				recipients = append(recipients, entity)
+			} else {
+				notFound = append(notFound, keyID)
 			}
+		}
+
+		if len(notFound) > 0 {
+			dialog.ShowError(fmt.Errorf("keys not found: %s", strings.Join(notFound, ", ")), a.window)
+			return
+		}
+		if len(recipients) == 0 {
+			dialog.ShowError(fmt.Errorf("no valid recipients found"), a.window)
+			return
 		}
 
 		result, err := crypto.Encrypt(strings.NewReader(inputEntry.Text), crypto.EncryptParams{
@@ -67,11 +80,18 @@ func (a *App) buildEncryptTab() fyne.CanvasObject {
 			return
 		}
 
+		pass := []byte(symmetricPassEntry.Text)
 		result, err := crypto.EncryptSymmetric(
 			strings.NewReader(inputEntry.Text),
-			[]byte(symmetricPassEntry.Text),
+			pass,
 			armorCheck.Checked,
 		)
+		// Zero passphrase copy
+		for i := range pass {
+			pass[i] = 0
+		}
+		symmetricPassEntry.SetText("")
+
 		if err != nil {
 			dialog.ShowError(fmt.Errorf("encryption failed: %w", err), a.window)
 			return
@@ -118,6 +138,13 @@ func (a *App) buildEncryptTab() fyne.CanvasObject {
 		}
 
 		result, err := crypto.Decrypt(bytes.NewReader([]byte(decInput.Text)), allKeys, passphrase)
+
+		// Zero passphrase copy
+		for i := range passphrase {
+			passphrase[i] = 0
+		}
+		decPassEntry.SetText("")
+
 		if err != nil {
 			dialog.ShowError(fmt.Errorf("decryption failed: %w", err), a.window)
 			return
@@ -159,16 +186,12 @@ func (a *App) getKeyOptions() []string {
 	seen := make(map[string]bool)
 
 	for _, e := range a.kr.PublicKeys() {
-		id := e.PrimaryKey.KeyIdString()
-		if seen[id] {
+		fp := fmt.Sprintf("%X", e.PrimaryKey.Fingerprint)
+		if seen[fp] {
 			continue
 		}
-		seen[id] = true
-		var uid string
-		for _, identity := range e.Identities {
-			uid = identity.Name
-			break
-		}
+		seen[fp] = true
+		uid := keyring.PrimaryUID(e)
 		options = append(options, fmt.Sprintf("%s [%s]", uid, e.PrimaryKey.KeyIdShortString()))
 	}
 	return options

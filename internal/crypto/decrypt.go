@@ -41,6 +41,9 @@ func Decrypt(ciphertext io.Reader, keyring openpgp.KeyRing, passphrase []byte) (
 	if err != nil {
 		return nil, fmt.Errorf("read ciphertext: %w", err)
 	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty ciphertext")
+	}
 
 	var reader io.Reader
 	if isArmored(data) {

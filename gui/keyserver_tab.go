@@ -2,6 +2,7 @@ package gui
 
 import (
 	"fmt"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -27,6 +28,10 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 		if searchEntry.Text == "" {
 			return
 		}
+		if !isValidServerURL(serverEntry.Text) {
+			dialog.ShowError(fmt.Errorf("invalid keyserver URL"), a.window)
+			return
+		}
 		client := keyserver.NewClient(serverEntry.Text)
 
 		progress := dialog.NewProgressInfinite("Searching", "Querying keyserver...", a.window)
@@ -48,16 +53,16 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 				return
 			}
 
-			var sb string
+			var sb strings.Builder
 			for _, r := range results {
-				sb += fmt.Sprintf("Key ID: %s  (%s)\n", r.KeyID, r.Algorithm)
+				fmt.Fprintf(&sb, "Key ID: %s  (%s)\n", r.KeyID, r.Algorithm)
 				for _, uid := range r.UIDs {
-					sb += fmt.Sprintf("  uid: %s\n", uid)
+					fmt.Fprintf(&sb, "  uid: %s\n", uid)
 				}
-				sb += "\n"
+				sb.WriteString("\n")
 			}
 			searchResults.Enable()
-			searchResults.SetText(sb)
+			searchResults.SetText(sb.String())
 			searchResults.Disable()
 		}()
 	})
@@ -68,6 +73,10 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 
 	recvBtn := widget.NewButton("Receive Key", func() {
 		if recvEntry.Text == "" {
+			return
+		}
+		if !isValidServerURL(serverEntry.Text) {
+			dialog.ShowError(fmt.Errorf("invalid keyserver URL"), a.window)
 			return
 		}
 		client := keyserver.NewClient(serverEntry.Text)
@@ -106,6 +115,10 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 		if sendSelect.Selected == "" {
 			return
 		}
+		if !isValidServerURL(serverEntry.Text) {
+			dialog.ShowError(fmt.Errorf("invalid keyserver URL"), a.window)
+			return
+		}
 		keyID := extractKeyID(sendSelect.Selected)
 		data, err := a.kr.ExportPublicKey(keyID, true)
 		if err != nil {
@@ -135,6 +148,10 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 
 	// --- Refresh keyring ---
 	refreshBtn := widget.NewButton("Refresh Keys from Server", func() {
+		if !isValidServerURL(serverEntry.Text) {
+			dialog.ShowError(fmt.Errorf("invalid keyserver URL"), a.window)
+			return
+		}
 		client := keyserver.NewClient(serverEntry.Text)
 		progress := dialog.NewProgressInfinite("Refreshing", "Updating keys from keyserver...", a.window)
 		progress.Show()
@@ -153,6 +170,7 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 					}
 				}
 			}
+
 			progress.Hide()
 			dialog.ShowInformation("Refresh Complete",
 				fmt.Sprintf("Updated %d key(s)", updated),
@@ -171,6 +189,8 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 			} else {
 				keyDetailLabel.SetText("")
 			}
+		} else {
+			keyDetailLabel.SetText("")
 		}
 	}
 
@@ -196,4 +216,16 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 
 		refreshBtn,
 	))
+}
+
+// isValidServerURL checks that the server URL looks reasonable.
+func isValidServerURL(url string) bool {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return false
+	}
+	return strings.HasPrefix(url, "hkp://") ||
+		strings.HasPrefix(url, "hkps://") ||
+		strings.HasPrefix(url, "http://") ||
+		strings.HasPrefix(url, "https://")
 }

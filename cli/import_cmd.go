@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"fmt"
-	"os"
 
 	"github.com/hamalizer/gpg_go/internal/keyring"
 	"github.com/spf13/cobra"
@@ -11,10 +10,10 @@ import (
 
 func newImportCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "import <file>",
+		Use:     "import [file]",
 		Aliases: []string{"recv"},
 		Short:   "Import keys from a file",
-		Long:    "Import public or private keys from an armored or binary key file.",
+		Long:    "Import public or private keys from an armored key file. Reads from file or stdin.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input, err := readInput(args)
 			if err != nil {
@@ -54,16 +53,14 @@ func newExportCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				_, err = os.Stdout.Write(data)
-				return err
+				return writeOutput(data)
 			}
 
 			data, err := kr.ExportPublicKey(identifier, true)
 			if err != nil {
 				return err
 			}
-			_, err = os.Stdout.Write(data)
-			return err
+			return writeOutput(data)
 		},
 	}
 

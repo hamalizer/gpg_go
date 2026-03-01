@@ -41,6 +41,13 @@ type KeyGenParams struct {
 }
 
 func GenerateKey(params KeyGenParams) (*openpgp.Entity, error) {
+	if params.Name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	if params.Email == "" {
+		return nil, fmt.Errorf("email is required")
+	}
+
 	cfg := &packet.Config{
 		DefaultHash:   gocrypto.SHA256,
 		DefaultCipher: packet.CipherAES256,

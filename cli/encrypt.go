@@ -3,11 +3,13 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/hamalizer/gpg_go/internal/crypto"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 func newEncryptCmd() *cobra.Command {
@@ -22,6 +24,7 @@ func newEncryptCmd() *cobra.Command {
 		Aliases: []string{"enc", "-e"},
 		Short:   "Encrypt a file or stdin",
 		Long:    "Encrypt data for one or more recipients. Reads from file or stdin.",
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input, err := readInput(args)
 			if err != nil {
@@ -29,11 +32,23 @@ func newEncryptCmd() *cobra.Command {
 			}
 
 			if symmetric {
-				fmt.Print("Passphrase: ")
-				passphrase := readPassphrase()
-				fmt.Print("Repeat passphrase: ")
-				passphrase2 := readPassphrase()
-				if string(passphrase) != string(passphrase2) {
+				fmt.Fprint(os.Stderr, "Passphrase: ")
+				passphrase, err := readPassphrase()
+				if err != nil {
+					return fmt.Errorf("read passphrase: %w", err)
+				}
+				fmt.Fprintln(os.Stderr)
+				defer zeroBytes(passphrase)
+
+				fmt.Fprint(os.Stderr, "Repeat passphrase: ")
+				passphrase2, err := readPassphrase()
+				if err != nil {
+					return fmt.Errorf("read passphrase: %w", err)
+				}
+				fmt.Fprintln(os.Stderr)
+				defer zeroBytes(passphrase2)
+
+				if !bytes.Equal(passphrase, passphrase2) {
 					return fmt.Errorf("passphrases do not match")
 				}
 
@@ -94,22 +109,43 @@ func readInput(args []string) ([]byte, error) {
 		return data, nil
 	}
 
-	// Read from stdin
-	stat, _ := os.Stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) != 0 {
+	// Read from stdin (portable: works on Windows, Linux, macOS)
+	stat, err := os.Stdin.Stat()
+	if err == nil && (stat.Mode()&os.ModeCharDevice) != 0 {
 		fmt.Fprintln(os.Stderr, "Reading from stdin (Ctrl+D to finish)...")
 	}
 
-	data, err := os.ReadFile("/dev/stdin")
+	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return nil, fmt.Errorf("read stdin: %w", err)
 	}
 	return data, nil
 }
 
-func readPassphrase() []byte {
-	// Simple passphrase reading - in production you'd use term.ReadPassword
-	var passphrase string
-	fmt.Scanln(&passphrase)
-	return []byte(passphrase)
+// readPassphrase reads a passphrase from the terminal with echo disabled.
+func readPassphrase() ([]byte, error) {
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		return term.ReadPassword(fd)
+	}
+	// Not a terminal (piped input) - read a line
+	var buf []byte
+	b := make([]byte, 1)
+	for {
+		n, err := os.Stdin.Read(b)
+		if n > 0 && b[0] != '\n' && b[0] != '\r' {
+			buf = append(buf, b[0])
+		}
+		if err != nil || b[0] == '\n' {
+			break
+		}
+	}
+	return buf, nil
+}
+
+// zeroBytes overwrites a byte slice with zeros to remove sensitive data from memory.
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }

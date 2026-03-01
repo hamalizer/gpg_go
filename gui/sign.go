@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 	"github.com/hamalizer/gpg_go/internal/crypto"
+	"github.com/hamalizer/gpg_go/internal/keyring"
 )
 
 func (a *App) buildSignTab() fyne.CanvasObject {
@@ -164,11 +165,7 @@ func (a *App) buildSignTab() fyne.CanvasObject {
 func (a *App) getSecretKeyOptions() []string {
 	var options []string
 	for _, e := range a.kr.SecretKeys() {
-		var uid string
-		for _, identity := range e.Identities {
-			uid = identity.Name
-			break
-		}
+		uid := keyring.PrimaryUID(e)
 		options = append(options, fmt.Sprintf("%s [%s]", uid, e.PrimaryKey.KeyIdShortString()))
 	}
 	return options

@@ -6,10 +6,16 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+)
+
+const (
+	maxSearchResponseSize = 1 << 20  // 1 MB for search results
+	maxKeyResponseSize    = 10 << 20 // 10 MB for key data
 )
 
 type Client struct {
@@ -18,10 +24,14 @@ type Client struct {
 }
 
 func NewClient(serverURL string) *Client {
-	if !strings.HasPrefix(serverURL, "http") {
+	// Handle HKP-specific URI schemes (RFC 7929)
+	if strings.HasPrefix(serverURL, "hkps://") {
+		serverURL = "https://" + strings.TrimPrefix(serverURL, "hkps://")
+	} else if strings.HasPrefix(serverURL, "hkp://") {
+		serverURL = "http://" + strings.TrimPrefix(serverURL, "hkp://")
+	} else if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
 		serverURL = "https://" + serverURL
 	}
-	// Normalize: strip trailing slash
 	serverURL = strings.TrimRight(serverURL, "/")
 
 	return &Client{
@@ -50,7 +60,7 @@ func (c *Client) SearchKeys(query string) ([]KeyResult, error) {
 		return nil, fmt.Errorf("keyserver returned status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSearchResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
@@ -80,7 +90,8 @@ func (c *Client) FetchKey(keyID string) (openpgp.EntityList, error) {
 		return nil, fmt.Errorf("keyserver returned status %d", resp.StatusCode)
 	}
 
-	entities, err := openpgp.ReadArmoredKeyRing(resp.Body)
+	limited := io.LimitReader(resp.Body, maxKeyResponseSize)
+	entities, err := openpgp.ReadArmoredKeyRing(limited)
 	if err != nil {
 		return nil, fmt.Errorf("read key from keyserver: %w", err)
 	}
@@ -102,7 +113,7 @@ func (c *Client) UploadKey(armoredKey string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("keyserver returned status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -153,6 +164,9 @@ func parseMachineReadableIndex(body string) []KeyResult {
 				default:
 					current.Algorithm = "algo:" + parts[2]
 				}
+			}
+			if len(parts) > 3 {
+				current.KeyLen, _ = strconv.Atoi(parts[3])
 			}
 			if len(parts) > 4 {
 				current.Created = parts[4]

@@ -2,7 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/hamalizer/gpg_go/internal/keyring"
 	"github.com/spf13/cobra"
 )
@@ -24,13 +26,19 @@ func newListKeysCmd() *cobra.Command {
 				search = args[0]
 			}
 
-			fmt.Printf("Public keyring: %d key(s)\n\n", len(keys))
+			// Count matching keys for accurate header
+			var matching []string
 			for _, entity := range keys {
 				info := keyring.KeyInfo(entity)
-				if search == "" || containsCI(info, search) {
-					fmt.Println(info)
-					fmt.Println()
+				if search == "" || strings.Contains(strings.ToLower(info), strings.ToLower(search)) {
+					matching = append(matching, info)
 				}
+			}
+
+			fmt.Printf("Public keyring: %d key(s)\n\n", len(matching))
+			for _, info := range matching {
+				fmt.Println(info)
+				fmt.Println()
 			}
 			return nil
 		},
@@ -54,13 +62,18 @@ func newListSecretKeysCmd() *cobra.Command {
 				search = args[0]
 			}
 
-			fmt.Printf("Secret keyring: %d key(s)\n\n", len(keys))
+			var matching []string
 			for _, entity := range keys {
 				info := keyring.KeyInfo(entity)
-				if search == "" || containsCI(info, search) {
-					fmt.Println(info)
-					fmt.Println()
+				if search == "" || strings.Contains(strings.ToLower(info), strings.ToLower(search)) {
+					matching = append(matching, info)
 				}
+			}
+
+			fmt.Printf("Secret keyring: %d key(s)\n\n", len(matching))
+			for _, info := range matching {
+				fmt.Println(info)
+				fmt.Println()
 			}
 			return nil
 		},
@@ -83,26 +96,34 @@ func newFingerprintCmd() *cobra.Command {
 				search = args[0]
 			}
 
+			if search != "" {
+				// Find the specific key once, not per iteration (O(n) not O(n^2))
+				found := kr.FindPublicKey(search)
+				if found == nil {
+					return fmt.Errorf("key not found: %s", search)
+				}
+				printFingerprint(found)
+				return nil
+			}
+
 			for _, entity := range keys {
-				if search != "" {
-					found := kr.FindPublicKey(search)
-					if found == nil || found != entity {
-						continue
-					}
-				}
-
-				fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
-				formatted := formatFingerprint(fp)
-
-				for _, id := range entity.Identities {
-					fmt.Printf("%s\n", id.Name)
-				}
-				fmt.Printf("  Key ID: %s\n", entity.PrimaryKey.KeyIdString())
-				fmt.Printf("  Fingerprint: %s\n\n", formatted)
+				printFingerprint(entity)
 			}
 			return nil
 		},
 	}
+}
+
+func printFingerprint(entity *openpgp.Entity) {
+	fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
+	formatted := formatFingerprint(fp)
+
+	// Use sorted UIDs for deterministic output
+	for _, uid := range keyring.SortedUIDs(entity) {
+		fmt.Printf("%s\n", uid)
+	}
+	fmt.Printf("  Key ID: %s\n", entity.PrimaryKey.KeyIdString())
+	fmt.Printf("  Fingerprint: %s\n\n", formatted)
 }
 
 func newDeleteCmd() *cobra.Command {
@@ -126,6 +147,7 @@ func newDeleteCmd() *cobra.Command {
 				if !deleteSecret {
 					return fmt.Errorf("delete public key: %w", err)
 				}
+				// Secret-only delete: public key not found is not fatal
 			} else {
 				fmt.Printf("Public key %s deleted.\n", keyID)
 			}
@@ -149,52 +171,9 @@ func formatFingerprint(fp string) string {
 	}
 
 	if len(parts) > 5 {
-		left := joinStr(parts[:5], " ")
-		right := joinStr(parts[5:], " ")
+		left := strings.Join(parts[:5], " ")
+		right := strings.Join(parts[5:], " ")
 		return left + "  " + right
 	}
-	return joinStr(parts, " ")
-}
-
-func joinStr(parts []string, sep string) string {
-	result := ""
-	for i, p := range parts {
-		if i > 0 {
-			result += sep
-		}
-		result += p
-	}
-	return result
-}
-
-func containsCI(s, substr string) bool {
-	return len(s) >= len(substr) &&
-		fmt.Sprintf("%s", s) != "" &&
-		(func() bool {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if equalFoldBytes(s[i:i+len(substr)], substr) {
-					return true
-				}
-			}
-			return false
-		})()
-}
-
-func equalFoldBytes(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := 0; i < len(a); i++ {
-		ca, cb := a[i], b[i]
-		if ca >= 'A' && ca <= 'Z' {
-			ca += 'a' - 'A'
-		}
-		if cb >= 'A' && cb <= 'Z' {
-			cb += 'a' - 'A'
-		}
-		if ca != cb {
-			return false
-		}
-	}
-	return true
+	return strings.Join(parts, " ")
 }

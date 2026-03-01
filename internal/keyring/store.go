@@ -35,9 +35,11 @@ func (s *Store) SavePublicKey(entity *openpgp.Entity) error {
 		w.Close()
 		return fmt.Errorf("serialize public key: %w", err)
 	}
-	w.Close()
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("finalize armor: %w", err)
+	}
 
-	return os.WriteFile(path, buf.Bytes(), 0644)
+	return os.WriteFile(path, buf.Bytes(), 0600)
 }
 
 func (s *Store) SavePrivateKey(entity *openpgp.Entity) error {
@@ -53,7 +55,9 @@ func (s *Store) SavePrivateKey(entity *openpgp.Entity) error {
 		w.Close()
 		return fmt.Errorf("serialize private key: %w", err)
 	}
-	w.Close()
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("finalize armor: %w", err)
+	}
 
 	return os.WriteFile(path, buf.Bytes(), 0600)
 }
@@ -77,12 +81,23 @@ func (s *Store) DeleteKey(keyID string, private bool) error {
 		return err
 	}
 
+	// Normalize key ID for matching
+	keyID = strings.ToUpper(strings.TrimPrefix(strings.ToUpper(keyID), "0X"))
+
+	deleted := false
 	for _, entry := range entries {
-		if strings.Contains(strings.ToUpper(entry.Name()), strings.ToUpper(keyID)) {
-			return os.Remove(filepath.Join(dir, entry.Name()))
+		name := strings.TrimSuffix(entry.Name(), ".asc")
+		if strings.EqualFold(name, keyID) {
+			if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
+				return err
+			}
+			deleted = true
 		}
 	}
-	return fmt.Errorf("key %s not found", keyID)
+	if !deleted {
+		return fmt.Errorf("key %s not found", keyID)
+	}
+	return nil
 }
 
 func (s *Store) loadKeysFromDir(dir string) (openpgp.EntityList, error) {

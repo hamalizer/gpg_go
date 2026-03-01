@@ -15,6 +15,7 @@ func newDecryptCmd() *cobra.Command {
 		Aliases: []string{"dec", "-d"},
 		Short:   "Decrypt a file or stdin",
 		Long:    "Decrypt an OpenPGP encrypted message. Reads from file or stdin.",
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input, err := readInput(args)
 			if err != nil {
@@ -27,7 +28,12 @@ func newDecryptCmd() *cobra.Command {
 			if err != nil {
 				// May need passphrase
 				fmt.Fprint(os.Stderr, "Passphrase: ")
-				passphrase := readPassphrase()
+				passphrase, pErr := readPassphrase()
+				if pErr != nil {
+					return fmt.Errorf("read passphrase: %w", pErr)
+				}
+				fmt.Fprintln(os.Stderr)
+				defer zeroBytes(passphrase)
 
 				result, err = crypto.Decrypt(bytes.NewReader(input), allKeys, passphrase)
 				if err != nil {

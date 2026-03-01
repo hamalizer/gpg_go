@@ -38,7 +38,10 @@ func (a *App) buildSettingsTab() fyne.CanvasObject {
 
 	saveBtn := widget.NewButton("Save Settings", func() {
 		a.cfg.Keyserver = keyserverEntry.Text
-		dialog.ShowInformation("Settings", "Settings saved.", a.window)
+		// Update stats on save
+		statsLabel.SetText(fmt.Sprintf("Public keys: %d | Secret keys: %d",
+			len(a.kr.PublicKeys()), len(a.kr.SecretKeys())))
+		dialog.ShowInformation("Settings", "Settings applied for this session.", a.window)
 	})
 
 	versionLabel := widget.NewLabel(fmt.Sprintf("gpg-go v%s", config.AppVersion))

@@ -20,6 +20,7 @@ func newSignCmd() *cobra.Command {
 		Aliases: []string{"-s"},
 		Short:   "Sign a file or stdin",
 		Long:    "Create a digital signature. Supports detached, clear-text, and inline signatures.",
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			input, err := readInput(args)
 			if err != nil {

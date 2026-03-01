@@ -17,7 +17,7 @@ import (
 func (a *App) buildKeysTab() fyne.CanvasObject {
 	keyList := widget.NewList(
 		func() int {
-			return len(a.kr.PublicKeys()) + len(a.kr.SecretKeys())
+			return len(a.getAllKeys())
 		},
 		func() fyne.CanvasObject {
 			return container.NewVBox(
@@ -36,12 +36,7 @@ func (a *App) buildKeysTab() fyne.CanvasObject {
 			}
 			entity := allKeys[i]
 
-			var uid string
-			for _, id := range entity.Identities {
-				uid = id.Name
-				break
-			}
-
+			uid := keyring.PrimaryUID(entity)
 			keyType := "pub"
 			if entity.PrivateKey != nil {
 				keyType = "sec"
@@ -76,11 +71,11 @@ func (a *App) buildKeysTab() fyne.CanvasObject {
 
 	exportBtn := widget.NewButton("Export Key", func() {
 		allKeys := a.getAllKeys()
-		if keyList.Length() == 0 || len(allKeys) == 0 {
+		if len(allKeys) == 0 {
 			dialog.ShowInformation("Export", "No keys to export.", a.window)
 			return
 		}
-		a.showExportDialog(allKeys)
+		a.showExportDialog()
 	})
 
 	deleteBtn := widget.NewButton("Delete Key", func() {
@@ -88,7 +83,7 @@ func (a *App) buildKeysTab() fyne.CanvasObject {
 		if len(allKeys) == 0 {
 			return
 		}
-		a.showDeleteDialog(allKeys, keyList)
+		a.showDeleteDialog(keyList)
 	})
 
 	toolbar := container.NewHBox(generateBtn, importBtn, exportBtn, deleteBtn, layout.NewSpacer())
@@ -109,20 +104,30 @@ func (a *App) getAllKeys() []*openpgp.Entity {
 	seen := make(map[string]bool)
 
 	for _, e := range a.kr.SecretKeys() {
-		id := e.PrimaryKey.KeyIdString()
-		if !seen[id] {
+		fp := fmt.Sprintf("%X", e.PrimaryKey.Fingerprint)
+		if !seen[fp] {
 			all = append(all, e)
-			seen[id] = true
+			seen[fp] = true
 		}
 	}
 	for _, e := range a.kr.PublicKeys() {
-		id := e.PrimaryKey.KeyIdString()
-		if !seen[id] {
+		fp := fmt.Sprintf("%X", e.PrimaryKey.Fingerprint)
+		if !seen[fp] {
 			all = append(all, e)
-			seen[id] = true
+			seen[fp] = true
 		}
 	}
 	return all
+}
+
+// keyOptionStrings builds display strings for a list of keys.
+func keyOptionStrings(keys []*openpgp.Entity) []string {
+	options := make([]string, 0, len(keys))
+	for _, e := range keys {
+		uid := keyring.PrimaryUID(e)
+		options = append(options, fmt.Sprintf("%s [%s]", uid, e.PrimaryKey.KeyIdShortString()))
+	}
+	return options
 }
 
 func (a *App) showGenerateDialog(keyList *widget.List) {
@@ -149,13 +154,24 @@ func (a *App) showGenerateDialog(keyList *widget.List) {
 			if !ok {
 				return
 			}
-			if nameEntry.Text == "" || emailEntry.Text == "" {
+
+			// Capture widget values before launching goroutine
+			name := strings.TrimSpace(nameEntry.Text)
+			email := strings.TrimSpace(emailEntry.Text)
+			comment := strings.TrimSpace(commentEntry.Text)
+			algoIdx := algoSelect.SelectedIndex()
+
+			if name == "" || email == "" {
 				dialog.ShowError(fmt.Errorf("name and email are required"), a.window)
+				return
+			}
+			if !strings.Contains(email, "@") {
+				dialog.ShowError(fmt.Errorf("invalid email address"), a.window)
 				return
 			}
 
 			algo := crypto.AlgoEd25519
-			switch algoSelect.SelectedIndex() {
+			switch algoIdx {
 			case 1:
 				algo = crypto.AlgoRSA4096
 			case 2:
@@ -169,9 +185,9 @@ func (a *App) showGenerateDialog(keyList *widget.List) {
 
 			go func() {
 				entity, err := crypto.GenerateKey(crypto.KeyGenParams{
-					Name:      nameEntry.Text,
-					Comment:   commentEntry.Text,
-					Email:     emailEntry.Text,
+					Name:      name,
+					Comment:   comment,
+					Email:     email,
 					Algorithm: algo,
 				})
 				progress.Hide()
@@ -229,16 +245,10 @@ func (a *App) showImportDialog(keyList *widget.List) {
 	d.Show()
 }
 
-func (a *App) showExportDialog(allKeys []*openpgp.Entity) {
-	var options []string
-	for _, e := range allKeys {
-		var uid string
-		for _, id := range e.Identities {
-			uid = id.Name
-			break
-		}
-		options = append(options, fmt.Sprintf("%s (%s)", uid, e.PrimaryKey.KeyIdShortString()))
-	}
+func (a *App) showExportDialog() {
+	// Take a fresh snapshot of keys at dialog open time
+	allKeys := a.getAllKeys()
+	options := keyOptionStrings(allKeys)
 
 	sel := widget.NewSelect(options, nil)
 	sel.SetSelectedIndex(0)
@@ -257,7 +267,8 @@ func (a *App) showExportDialog(allKeys []*openpgp.Entity) {
 			}
 
 			entity := allKeys[idx]
-			identifier := entity.PrimaryKey.KeyIdString()
+			// Use fingerprint for reliable lookup
+			identifier := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
 			data, err := a.kr.ExportPublicKey(identifier, true)
 			if err != nil {
 				dialog.ShowError(err, a.window)
@@ -279,16 +290,10 @@ func (a *App) showExportDialog(allKeys []*openpgp.Entity) {
 	d.Show()
 }
 
-func (a *App) showDeleteDialog(allKeys []*openpgp.Entity, keyList *widget.List) {
-	var options []string
-	for _, e := range allKeys {
-		var uid string
-		for _, id := range e.Identities {
-			uid = id.Name
-			break
-		}
-		options = append(options, fmt.Sprintf("%s (%s)", uid, e.PrimaryKey.KeyIdShortString()))
-	}
+func (a *App) showDeleteDialog(keyList *widget.List) {
+	// Take a fresh snapshot of keys at dialog open time
+	allKeys := a.getAllKeys()
+	options := keyOptionStrings(allKeys)
 
 	sel := widget.NewSelect(options, nil)
 	sel.SetSelectedIndex(0)
@@ -315,8 +320,16 @@ func (a *App) showDeleteDialog(allKeys []*openpgp.Entity, keyList *widget.List) 
 					if !confirmed {
 						return
 					}
-					_ = a.kr.DeletePublicKey(keyID)
-					_ = a.kr.DeleteSecretKey(keyID)
+					var errs []string
+					if err := a.kr.DeletePublicKey(keyID); err != nil {
+						errs = append(errs, fmt.Sprintf("public: %v", err))
+					}
+					if err := a.kr.DeleteSecretKey(keyID); err != nil {
+						errs = append(errs, fmt.Sprintf("secret: %v", err))
+					}
+					if len(errs) > 0 {
+						dialog.ShowError(fmt.Errorf("delete errors: %s", strings.Join(errs, "; ")), a.window)
+					}
 					keyList.Refresh()
 				},
 				a.window,

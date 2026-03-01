@@ -2,6 +2,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -24,9 +25,9 @@ type Config struct {
 	Verbose    bool
 }
 
-func DefaultHomeDir() string {
+func DefaultHomeDir() (string, error) {
 	if env := os.Getenv("GPG_GO_HOME"); env != "" {
-		return env
+		return env, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -36,12 +37,19 @@ func DefaultHomeDir() string {
 			home = os.Getenv("HOME")
 		}
 	}
-	return filepath.Join(home, DirName)
+	if home == "" {
+		return "", fmt.Errorf("unable to determine home directory: set GPG_GO_HOME or HOME")
+	}
+	return filepath.Join(home, DirName), nil
 }
 
 func New(homeDir string) (*Config, error) {
 	if homeDir == "" {
-		homeDir = DefaultHomeDir()
+		var err error
+		homeDir, err = DefaultHomeDir()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	cfg := &Config{

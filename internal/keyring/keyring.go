@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -12,7 +14,9 @@ import (
 )
 
 // Keyring manages the in-memory and on-disk key collections.
+// All methods are safe for concurrent use.
 type Keyring struct {
+	mu      sync.RWMutex
 	store   *Store
 	pubKeys openpgp.EntityList
 	secKeys openpgp.EntityList
@@ -41,15 +45,25 @@ func New(cfg *config.Config) (*Keyring, error) {
 }
 
 func (kr *Keyring) PublicKeys() openpgp.EntityList {
-	return kr.pubKeys
+	kr.mu.RLock()
+	defer kr.mu.RUnlock()
+	result := make(openpgp.EntityList, len(kr.pubKeys))
+	copy(result, kr.pubKeys)
+	return result
 }
 
 func (kr *Keyring) SecretKeys() openpgp.EntityList {
-	return kr.secKeys
+	kr.mu.RLock()
+	defer kr.mu.RUnlock()
+	result := make(openpgp.EntityList, len(kr.secKeys))
+	copy(result, kr.secKeys)
+	return result
 }
 
 // AllKeys returns all keys (public + secret) as an EntityList for decryption.
 func (kr *Keyring) AllKeys() openpgp.EntityList {
+	kr.mu.RLock()
+	defer kr.mu.RUnlock()
 	all := make(openpgp.EntityList, 0, len(kr.pubKeys)+len(kr.secKeys))
 	all = append(all, kr.pubKeys...)
 	all = append(all, kr.secKeys...)
@@ -59,21 +73,36 @@ func (kr *Keyring) AllKeys() openpgp.EntityList {
 func (kr *Keyring) ImportKey(armoredKey io.Reader) ([]*openpgp.Entity, error) {
 	entities, err := openpgp.ReadArmoredKeyRing(armoredKey)
 	if err != nil {
-		return nil, fmt.Errorf("read armored key: %w", err)
+		// Try binary format as fallback
+		return nil, fmt.Errorf("read key: %w", err)
 	}
+
+	kr.mu.Lock()
+	defer kr.mu.Unlock()
 
 	var imported []*openpgp.Entity
 	for _, entity := range entities {
+		fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
 		if entity.PrivateKey != nil {
-			if err := kr.store.SavePrivateKey(entity); err != nil {
-				return imported, fmt.Errorf("save private key: %w", err)
+			if !kr.hasKeyLocked(kr.secKeys, fp) {
+				if err := kr.store.SavePrivateKey(entity); err != nil {
+					return imported, fmt.Errorf("save private key: %w", err)
+				}
+				kr.secKeys = append(kr.secKeys, entity)
 			}
-			kr.secKeys = append(kr.secKeys, entity)
+			if !kr.hasKeyLocked(kr.pubKeys, fp) {
+				if err := kr.store.SavePublicKey(entity); err != nil {
+					return imported, fmt.Errorf("save public key: %w", err)
+				}
+				kr.pubKeys = append(kr.pubKeys, entity)
+			}
 		} else {
-			if err := kr.store.SavePublicKey(entity); err != nil {
-				return imported, fmt.Errorf("save public key: %w", err)
+			if !kr.hasKeyLocked(kr.pubKeys, fp) {
+				if err := kr.store.SavePublicKey(entity); err != nil {
+					return imported, fmt.Errorf("save public key: %w", err)
+				}
+				kr.pubKeys = append(kr.pubKeys, entity)
 			}
-			kr.pubKeys = append(kr.pubKeys, entity)
 		}
 		imported = append(imported, entity)
 	}
@@ -81,34 +110,69 @@ func (kr *Keyring) ImportKey(armoredKey io.Reader) ([]*openpgp.Entity, error) {
 }
 
 func (kr *Keyring) AddEntity(entity *openpgp.Entity) error {
+	kr.mu.Lock()
+	defer kr.mu.Unlock()
+
+	fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
+
 	if entity.PrivateKey != nil {
-		if err := kr.store.SavePrivateKey(entity); err != nil {
-			return err
+		if !kr.hasKeyLocked(kr.secKeys, fp) {
+			if err := kr.store.SavePrivateKey(entity); err != nil {
+				return err
+			}
+			kr.secKeys = append(kr.secKeys, entity)
 		}
-		kr.secKeys = append(kr.secKeys, entity)
-		// Also save public part
-		if err := kr.store.SavePublicKey(entity); err != nil {
-			return err
+		if !kr.hasKeyLocked(kr.pubKeys, fp) {
+			if err := kr.store.SavePublicKey(entity); err != nil {
+				return err
+			}
+			kr.pubKeys = append(kr.pubKeys, entity)
 		}
-		kr.pubKeys = append(kr.pubKeys, entity)
 	} else {
-		if err := kr.store.SavePublicKey(entity); err != nil {
-			return err
+		if !kr.hasKeyLocked(kr.pubKeys, fp) {
+			if err := kr.store.SavePublicKey(entity); err != nil {
+				return err
+			}
+			kr.pubKeys = append(kr.pubKeys, entity)
 		}
-		kr.pubKeys = append(kr.pubKeys, entity)
 	}
 	return nil
 }
 
+// hasKeyLocked checks if a key with the given fingerprint exists in the list.
+// Caller must hold kr.mu.
+func (kr *Keyring) hasKeyLocked(keys openpgp.EntityList, fingerprint string) bool {
+	for _, e := range keys {
+		if fmt.Sprintf("%X", e.PrimaryKey.Fingerprint) == fingerprint {
+			return true
+		}
+	}
+	return false
+}
+
 func (kr *Keyring) FindPublicKey(identifier string) *openpgp.Entity {
+	kr.mu.RLock()
+	defer kr.mu.RUnlock()
 	return findKey(kr.pubKeys, identifier)
 }
 
 func (kr *Keyring) FindSecretKey(identifier string) *openpgp.Entity {
+	kr.mu.RLock()
+	defer kr.mu.RUnlock()
 	return findKey(kr.secKeys, identifier)
 }
 
-func (kr *Keyring) DeletePublicKey(keyID string) error {
+func (kr *Keyring) DeletePublicKey(identifier string) error {
+	kr.mu.Lock()
+	defer kr.mu.Unlock()
+
+	// Resolve identifier (email, name, etc.) to actual key ID
+	entity := findKey(kr.pubKeys, identifier)
+	if entity == nil {
+		return fmt.Errorf("public key not found: %s", identifier)
+	}
+	keyID := entity.PrimaryKey.KeyIdString()
+
 	if err := kr.store.DeleteKey(keyID, false); err != nil {
 		return err
 	}
@@ -116,7 +180,17 @@ func (kr *Keyring) DeletePublicKey(keyID string) error {
 	return nil
 }
 
-func (kr *Keyring) DeleteSecretKey(keyID string) error {
+func (kr *Keyring) DeleteSecretKey(identifier string) error {
+	kr.mu.Lock()
+	defer kr.mu.Unlock()
+
+	// Resolve identifier (email, name, etc.) to actual key ID
+	entity := findKey(kr.secKeys, identifier)
+	if entity == nil {
+		return fmt.Errorf("secret key not found: %s", identifier)
+	}
+	keyID := entity.PrimaryKey.KeyIdString()
+
 	if err := kr.store.DeleteKey(keyID, true); err != nil {
 		return err
 	}
@@ -125,7 +199,10 @@ func (kr *Keyring) DeleteSecretKey(keyID string) error {
 }
 
 func (kr *Keyring) ExportPublicKey(identifier string, armored bool) ([]byte, error) {
-	entity := kr.FindPublicKey(identifier)
+	kr.mu.RLock()
+	entity := findKey(kr.pubKeys, identifier)
+	kr.mu.RUnlock()
+
 	if entity == nil {
 		return nil, fmt.Errorf("public key not found: %s", identifier)
 	}
@@ -140,7 +217,9 @@ func (kr *Keyring) ExportPublicKey(identifier string, armored bool) ([]byte, err
 			w.Close()
 			return nil, err
 		}
-		w.Close()
+		if err := w.Close(); err != nil {
+			return nil, fmt.Errorf("finalize armor: %w", err)
+		}
 	} else {
 		if err := entity.Serialize(&buf); err != nil {
 			return nil, err
@@ -150,7 +229,10 @@ func (kr *Keyring) ExportPublicKey(identifier string, armored bool) ([]byte, err
 }
 
 func (kr *Keyring) ExportSecretKey(identifier string, armored bool) ([]byte, error) {
-	entity := kr.FindSecretKey(identifier)
+	kr.mu.RLock()
+	entity := findKey(kr.secKeys, identifier)
+	kr.mu.RUnlock()
+
 	if entity == nil {
 		return nil, fmt.Errorf("secret key not found: %s", identifier)
 	}
@@ -165,7 +247,9 @@ func (kr *Keyring) ExportSecretKey(identifier string, armored bool) ([]byte, err
 			w.Close()
 			return nil, err
 		}
-		w.Close()
+		if err := w.Close(); err != nil {
+			return nil, fmt.Errorf("finalize armor: %w", err)
+		}
 	} else {
 		if err := entity.SerializePrivate(&buf, nil); err != nil {
 			return nil, err
@@ -178,14 +262,15 @@ func (kr *Keyring) ExportSecretKey(identifier string, armored bool) ([]byte, err
 func KeyInfo(entity *openpgp.Entity) string {
 	pk := entity.PrimaryKey
 	algo := "unknown"
-	bits := 0
+	bitStr := ""
+
+	if bl, err := pk.BitLength(); err == nil && bl > 0 {
+		bitStr = fmt.Sprintf("%d", bl)
+	}
 
 	switch pk.PubKeyAlgo {
 	case 1, 2, 3: // RSA
 		algo = "RSA"
-		if bl, err := pk.BitLength(); err == nil {
-			bits = int(bl)
-		}
 	case 17: // DSA
 		algo = "DSA"
 	case 18: // ECDH
@@ -194,24 +279,24 @@ func KeyInfo(entity *openpgp.Entity) string {
 		algo = "ECDSA"
 	case 22: // EdDSA
 		algo = "EdDSA"
-		bits = 256
+		if bitStr == "" {
+			bitStr = "256"
+		}
 	}
 
 	keyID := pk.KeyIdString()
 	fingerprint := fmt.Sprintf("%X", pk.Fingerprint)
 	created := pk.CreationTime.Format("2006-01-02")
 
-	var uids []string
-	for _, id := range entity.Identities {
-		uids = append(uids, id.Name)
-	}
+	// Sort identity names for deterministic output
+	uids := SortedUIDs(entity)
 
 	hasSecret := ""
 	if entity.PrivateKey != nil {
 		hasSecret = " [secret]"
 	}
 
-	info := fmt.Sprintf("%s%d/%s %s%s\n", algo, bits, keyID, created, hasSecret)
+	info := fmt.Sprintf("%s%s/%s %s%s\n", algo, bitStr, keyID, created, hasSecret)
 	for _, uid := range uids {
 		info += fmt.Sprintf("  uid: %s\n", uid)
 	}
@@ -219,17 +304,42 @@ func KeyInfo(entity *openpgp.Entity) string {
 	return info
 }
 
-func findKey(keys openpgp.EntityList, identifier string) *openpgp.Entity {
-	identifier = strings.ToUpper(strings.TrimPrefix(identifier, "0x"))
+// SortedUIDs returns identity names in deterministic order.
+func SortedUIDs(entity *openpgp.Entity) []string {
+	uids := make([]string, 0, len(entity.Identities))
+	for _, id := range entity.Identities {
+		uids = append(uids, id.Name)
+	}
+	sort.Strings(uids)
+	return uids
+}
 
+// PrimaryUID returns the first UID in sorted order.
+func PrimaryUID(entity *openpgp.Entity) string {
+	uids := SortedUIDs(entity)
+	if len(uids) > 0 {
+		return uids[0]
+	}
+	return ""
+}
+
+func findKey(keys openpgp.EntityList, identifier string) *openpgp.Entity {
+	// Normalize: strip 0x/0X prefix, uppercase for hex comparisons
+	upper := strings.ToUpper(identifier)
+	upper = strings.TrimPrefix(upper, "0X")
+
+	// First pass: exact match on key ID or fingerprint
 	for _, entity := range keys {
 		keyID := entity.PrimaryKey.KeyIdString()
 		fingerprint := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
 
-		if strings.EqualFold(keyID, identifier) || strings.EqualFold(fingerprint, identifier) {
+		if strings.EqualFold(keyID, upper) || strings.EqualFold(fingerprint, upper) {
 			return entity
 		}
+	}
 
+	// Second pass: substring match on identity names (only if not a hex-like identifier)
+	for _, entity := range keys {
 		for _, id := range entity.Identities {
 			if strings.Contains(strings.ToLower(id.Name), strings.ToLower(identifier)) {
 				return entity
@@ -240,11 +350,12 @@ func findKey(keys openpgp.EntityList, identifier string) *openpgp.Entity {
 }
 
 func removeKey(keys openpgp.EntityList, keyID string) openpgp.EntityList {
-	keyID = strings.ToUpper(strings.TrimPrefix(keyID, "0x"))
+	keyID = strings.ToUpper(strings.TrimPrefix(strings.ToUpper(keyID), "0X"))
 	var result openpgp.EntityList
 	for _, entity := range keys {
 		id := entity.PrimaryKey.KeyIdString()
-		if !strings.EqualFold(id, keyID) {
+		fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
+		if !strings.EqualFold(id, keyID) && !strings.EqualFold(fp, keyID) {
 			result = append(result, entity)
 		}
 	}

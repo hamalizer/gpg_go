@@ -26,31 +26,19 @@ func Encrypt(plaintext io.Reader, params EncryptParams) ([]byte, error) {
 	}
 
 	var output bytes.Buffer
-	var writeTarget io.WriteCloser
+	var armorWriter io.WriteCloser
+	var encTarget io.Writer = &output
 
 	if params.Armor {
-		armorWriter, err := armor.Encode(&output, "PGP MESSAGE", nil)
+		var err error
+		armorWriter, err = armor.Encode(&output, "PGP MESSAGE", nil)
 		if err != nil {
 			return nil, fmt.Errorf("armor encode: %w", err)
 		}
-		writeTarget = armorWriter
+		encTarget = armorWriter
 	}
 
-	var encBuf *bytes.Buffer
-	if !params.Armor {
-		encBuf = &output
-	} else {
-		encBuf = nil
-	}
-
-	var encWriter io.WriteCloser
-	var err error
-	if params.Armor {
-		encWriter, err = openpgp.Encrypt(writeTarget, params.Recipients, params.Signer, nil, cfg)
-	} else {
-		_ = encBuf
-		encWriter, err = openpgp.Encrypt(&output, params.Recipients, params.Signer, nil, cfg)
-	}
+	encWriter, err := openpgp.Encrypt(encTarget, params.Recipients, params.Signer, nil, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt: %w", err)
 	}
@@ -64,8 +52,8 @@ func Encrypt(plaintext io.Reader, params EncryptParams) ([]byte, error) {
 		return nil, fmt.Errorf("close encrypt writer: %w", err)
 	}
 
-	if params.Armor {
-		if err := writeTarget.Close(); err != nil {
+	if armorWriter != nil {
+		if err := armorWriter.Close(); err != nil {
 			return nil, fmt.Errorf("close armor writer: %w", err)
 		}
 	}
@@ -80,19 +68,19 @@ func EncryptSymmetric(plaintext io.Reader, passphrase []byte, useArmor bool) ([]
 	}
 
 	var output bytes.Buffer
-	var writeTarget io.Writer = &output
-
 	var armorWriter io.WriteCloser
+	var encTarget io.Writer = &output
+
 	if useArmor {
 		var err error
 		armorWriter, err = armor.Encode(&output, "PGP MESSAGE", nil)
 		if err != nil {
 			return nil, fmt.Errorf("armor encode: %w", err)
 		}
-		writeTarget = armorWriter
+		encTarget = armorWriter
 	}
 
-	encWriter, err := openpgp.SymmetricallyEncrypt(writeTarget, passphrase, nil, cfg)
+	encWriter, err := openpgp.SymmetricallyEncrypt(encTarget, passphrase, nil, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("symmetric encrypt: %w", err)
 	}

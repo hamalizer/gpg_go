@@ -1,0 +1,72 @@
+version: 2
+
+project_name: gpg-go
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: gpg-go
+    main: ./cmd/gpg-go
+    binary: gpg-go
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+      - openbsd
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ldflags:
+      - -s -w -X github.com/hamalizer/gpg_go/internal/config.AppVersion={{.Version}}
+    flags:
+      - -trimpath
+
+  - id: gpg-go-gui
+    main: ./cmd/gpg-go-gui
+    binary: gpg-go-gui
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/hamalizer/gpg_go/internal/config.AppVersion={{.Version}}
+    flags:
+      - -trimpath
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE*
+      - man/*
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"

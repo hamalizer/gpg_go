@@ -1,0 +1,7 @@
+gpg-go
+gpg-go-gui
+bin/
+dist/
+*.exe
+*.test
+*.out

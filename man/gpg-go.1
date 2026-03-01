@@ -1,0 +1,189 @@
+.TH GPG-GO 1 "2025-01-01" "gpg-go 0.1.0" "User Commands"
+.SH NAME
+gpg-go \- modern OpenPGP encryption and signing tool
+.SH SYNOPSIS
+.B gpg-go
+[\fIcommand\fR] [\fIoptions\fR] [\fIfiles\fR]
+.SH DESCRIPTION
+.B gpg-go
+is a complete, modern rewrite of GnuPG in Go. It provides full OpenPGP
+encryption, decryption, digital signing, signature verification, and key
+management. It supports both asymmetric (public-key) and symmetric
+(passphrase-based) cryptography.
+.PP
+gpg-go is designed to be cross-platform, running natively on Linux, macOS,
+Windows, FreeBSD, and other operating systems supported by Go.
+.SH COMMANDS
+.TP
+.B generate
+Generate a new OpenPGP key pair. Supports Ed25519 (recommended), RSA-4096,
+RSA-3072, and RSA-2048.
+.TP
+.B list-keys \fR[\fIsearch\fR]
+List public keys in the keyring. Optionally filter by search term.
+.TP
+.B list-secret-keys \fR[\fIsearch\fR]
+List secret (private) keys in the keyring.
+.TP
+.B encrypt \fR[\fIfile\fR]
+Encrypt a file or stdin for one or more recipients. Use \fB-r\fR to specify
+recipients and \fB-c\fR for symmetric encryption.
+.TP
+.B decrypt \fR[\fIfile\fR]
+Decrypt an OpenPGP encrypted message from a file or stdin.
+.TP
+.B sign \fR[\fIfile\fR]
+Create a digital signature. Supports detached (\fB-b\fR), clear-text
+(\fB--clear-sign\fR), and inline signatures.
+.TP
+.B verify \fIfile\fR [\fIsigned-file\fR]
+Verify a digital signature. For detached signatures, provide both the
+signature and the signed file.
+.TP
+.B import \fIfile\fR
+Import public or private keys from an armored key file.
+.TP
+.B export \fIkey-id\fR
+Export a public key in armored format. Use \fB--secret\fR to export the
+private key.
+.TP
+.B delete \fIkey-id\fR
+Delete a key from the keyring. Use \fB--secret\fR to also delete the
+secret key.
+.TP
+.B fingerprint \fR[\fIkey-id\fR]
+Display key fingerprints.
+.TP
+.B search-keys \fIquery\fR
+Search for keys on an HKP keyserver.
+.TP
+.B recv-keys \fIkey-id\fR...
+Download and import keys from an HKP keyserver.
+.TP
+.B send-keys \fIkey-id\fR...
+Upload public keys to an HKP keyserver.
+.SH OPTIONS
+.TP
+.BR \-a ", " \-\-armor
+Create ASCII armored output.
+.TP
+.BR \-o ", " \-\-output " " \fIfile\fR
+Write output to the specified file instead of stdout.
+.TP
+.BR \-r ", " \-\-recipient " " \fIname\fR
+Encrypt for the specified recipient. Can be a key ID, fingerprint, or
+email address. May be specified multiple times.
+.TP
+.BR \-u ", " \-\-local-user " " \fIname\fR
+Use the specified key for signing.
+.TP
+.BR \-c ", " \-\-symmetric
+Use symmetric (passphrase-based) encryption.
+.TP
+.BR \-b ", " \-\-detach-sign
+Create a detached signature.
+.TP
+.B \-\-clear-sign
+Create a clear text signature.
+.TP
+.B \-\-secret
+When used with \fBexport\fR or \fBdelete\fR, operate on secret keys.
+.TP
+.BR \-\-homedir " " \fIdir\fR
+Set the home directory for gpg-go data (default: ~/.gpg-go).
+.TP
+.BR \-\-keyserver " " \fIurl\fR
+Use the specified keyserver URL.
+.TP
+.BR \-v ", " \-\-verbose
+Enable verbose output.
+.TP
+.BR \-\-version
+Show version information.
+.TP
+.BR \-h ", " \-\-help
+Show help message.
+.SH ALGORITHMS
+.TP
+.B Ed25519 / X25519
+Modern elliptic curve algorithms. Fast, small keys, high security.
+Recommended for new keys.
+.TP
+.B RSA
+Traditional algorithm. Supported key sizes: 2048, 3072, 4096 bits.
+Widely compatible.
+.TP
+.B AES-256
+Default symmetric cipher for message encryption.
+.TP
+.B SHA-256
+Default hash algorithm for signatures.
+.SH FILES
+.TP
+.I ~/.gpg-go/
+Default home directory.
+.TP
+.I ~/.gpg-go/pubring/
+Public keyring directory. Keys stored as individual armored files.
+.TP
+.I ~/.gpg-go/secring/
+Secret keyring directory. Keys stored as individual armored files
+with restricted permissions (0600).
+.TP
+.I ~/.gpg-go/trustdb.json
+Trust database.
+.TP
+.I ~/.gpg-go/config.json
+Configuration file.
+.SH ENVIRONMENT
+.TP
+.B GPG_GO_HOME
+Override the default home directory.
+.SH EXAMPLES
+.PP
+Generate a new Ed25519 key:
+.RS
+gpg-go generate --quick --name "Alice" --email "alice@example.com"
+.RE
+.PP
+Encrypt a file for a recipient:
+.RS
+gpg-go encrypt -a -r bob@example.com secret.txt -o secret.txt.asc
+.RE
+.PP
+Decrypt a message:
+.RS
+gpg-go decrypt message.gpg
+.RE
+.PP
+Sign a file (detached, armored):
+.RS
+gpg-go sign -ab document.pdf
+.RE
+.PP
+Verify a detached signature:
+.RS
+gpg-go verify document.pdf.asc document.pdf
+.RE
+.PP
+Search a keyserver:
+.RS
+gpg-go search-keys alice@example.com
+.RE
+.PP
+Import a key from a keyserver:
+.RS
+gpg-go recv-keys ABCD1234EFGH5678
+.RE
+.SH COMPATIBILITY
+gpg-go implements the OpenPGP standard (RFC 4880 / RFC 9580) and is
+interoperable with GnuPG, Sequoia-PGP, and other RFC-compliant
+implementations.
+.SH SEE ALSO
+.BR gpg-go-gui (1),
+.BR gpg (1),
+.BR gpg2 (1)
+.SH AUTHORS
+Written in Go. Powered by ProtonMail's go-crypto library.
+.SH BUGS
+Report bugs at: https://github.com/hamalizer/gpg_go/issues

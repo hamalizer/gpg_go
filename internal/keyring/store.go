@@ -1,0 +1,115 @@
+// Package keyring manages OpenPGP key storage and retrieval.
+package keyring
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
+)
+
+// Store handles persisting keys to disk.
+type Store struct {
+	pubDir string
+	secDir string
+}
+
+func NewStore(pubDir, secDir string) *Store {
+	return &Store{pubDir: pubDir, secDir: secDir}
+}
+
+func (s *Store) SavePublicKey(entity *openpgp.Entity) error {
+	fp := entity.PrimaryKey.KeyIdString()
+	path := filepath.Join(s.pubDir, fp+".asc")
+
+	var buf bytes.Buffer
+	w, err := armor.Encode(&buf, openpgp.PublicKeyType, nil)
+	if err != nil {
+		return fmt.Errorf("armor encode: %w", err)
+	}
+	if err := entity.Serialize(w); err != nil {
+		w.Close()
+		return fmt.Errorf("serialize public key: %w", err)
+	}
+	w.Close()
+
+	return os.WriteFile(path, buf.Bytes(), 0644)
+}
+
+func (s *Store) SavePrivateKey(entity *openpgp.Entity) error {
+	fp := entity.PrimaryKey.KeyIdString()
+	path := filepath.Join(s.secDir, fp+".asc")
+
+	var buf bytes.Buffer
+	w, err := armor.Encode(&buf, openpgp.PrivateKeyType, nil)
+	if err != nil {
+		return fmt.Errorf("armor encode: %w", err)
+	}
+	if err := entity.SerializePrivate(w, nil); err != nil {
+		w.Close()
+		return fmt.Errorf("serialize private key: %w", err)
+	}
+	w.Close()
+
+	return os.WriteFile(path, buf.Bytes(), 0600)
+}
+
+func (s *Store) LoadPublicKeys() (openpgp.EntityList, error) {
+	return s.loadKeysFromDir(s.pubDir)
+}
+
+func (s *Store) LoadPrivateKeys() (openpgp.EntityList, error) {
+	return s.loadKeysFromDir(s.secDir)
+}
+
+func (s *Store) DeleteKey(keyID string, private bool) error {
+	dir := s.pubDir
+	if private {
+		dir = s.secDir
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if strings.Contains(strings.ToUpper(entry.Name()), strings.ToUpper(keyID)) {
+			return os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
+	return fmt.Errorf("key %s not found", keyID)
+}
+
+func (s *Store) loadKeysFromDir(dir string) (openpgp.EntityList, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var entities openpgp.EntityList
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".asc") {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+
+		el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(data))
+		if err != nil {
+			continue
+		}
+		entities = append(entities, el...)
+	}
+	return entities, nil
+}

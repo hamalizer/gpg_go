@@ -1,0 +1,64 @@
+.TH GPG-GO-GUI 1 "2025-01-01" "gpg-go 0.1.0" "User Commands"
+.SH NAME
+gpg-go-gui \- graphical interface for OpenPGP operations
+.SH SYNOPSIS
+.B gpg-go-gui
+.SH DESCRIPTION
+.B gpg-go-gui
+is the graphical user interface for gpg-go, providing a full-featured
+OpenPGP client with key management, encryption, decryption, signing,
+verification, and keyserver integration.
+.PP
+The GUI is built with Fyne and runs natively on Linux (X11/Wayland),
+macOS, Windows, FreeBSD, and other platforms.
+.SH TABS
+.TP
+.B Keys
+Manage your OpenPGP keyring. Generate new key pairs, import and export
+keys, view key details, and delete keys.
+.TP
+.B Encrypt / Decrypt
+Encrypt messages for selected recipients or with a passphrase. Decrypt
+incoming encrypted messages.
+.TP
+.B Sign / Verify
+Create digital signatures (detached, clear-text, or inline) and verify
+signatures on messages.
+.TP
+.B Keyserver
+Search for keys on HKP keyservers, download keys, upload your public
+keys, and refresh your keyring.
+.TP
+.B Settings
+Configure the default keyserver, theme (light/dark/system), and view
+application paths and statistics.
+.SH KEY GENERATION
+The GUI supports generating keys with the following algorithms:
+.IP \(bu 2
+Ed25519 (recommended) \- modern, fast, small keys
+.IP \(bu 2
+RSA-4096 \- traditional, maximum compatibility
+.IP \(bu 2
+RSA-3072 \- good balance of security and performance
+.IP \(bu 2
+RSA-2048 \- minimum recommended key size
+.SH FILES
+.TP
+.I ~/.gpg-go/
+Shared data directory with the gpg-go CLI tool.
+.SH ENVIRONMENT
+.TP
+.B GPG_GO_HOME
+Override the default home directory.
+.TP
+.B FYNE_THEME
+Set the Fyne theme (light or dark).
+.TP
+.B FYNE_SCALE
+Set the UI scale factor.
+.SH SEE ALSO
+.BR gpg-go (1)
+.SH AUTHORS
+Written in Go using the Fyne toolkit.
+.SH BUGS
+Report bugs at: https://github.com/hamalizer/gpg_go/issues

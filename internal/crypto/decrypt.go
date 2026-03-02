@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	gocrypto "crypto"
 	"fmt"
 	"io"
 
@@ -55,7 +56,10 @@ func Decrypt(ciphertext io.Reader, keyring openpgp.KeyRing, passphrase []byte) (
 		reader = bytes.NewReader(data)
 	}
 
-	cfg := &packet.Config{}
+	cfg := &packet.Config{
+		DefaultHash:   gocrypto.SHA256,
+		DefaultCipher: packet.CipherAES256,
+	}
 	var prompt func([]openpgp.Key, bool) ([]byte, error)
 	if passphrase != nil {
 		prompt = PromptFunc(passphrase)

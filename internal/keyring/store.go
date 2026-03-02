@@ -3,6 +3,7 @@ package keyring
 
 import (
 	"bytes"
+	gocrypto "crypto"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
 // Store handles persisting keys to disk.
@@ -51,7 +53,7 @@ func (s *Store) SavePrivateKey(entity *openpgp.Entity) error {
 	if err != nil {
 		return fmt.Errorf("armor encode: %w", err)
 	}
-	if err := entity.SerializePrivate(w, nil); err != nil {
+	if err := entity.SerializePrivate(w, s2kSerializeConfig()); err != nil {
 		w.Close()
 		return fmt.Errorf("serialize private key: %w", err)
 	}
@@ -98,6 +100,16 @@ func (s *Store) DeleteKey(keyID string, private bool) error {
 		return fmt.Errorf("key %s not found", keyID)
 	}
 	return nil
+}
+
+// s2kSerializeConfig returns a packet.Config with strong S2K parameters for
+// serializing encrypted private keys. When the key is encrypted, the library
+// uses these settings for the string-to-key derivation.
+func s2kSerializeConfig() *packet.Config {
+	return &packet.Config{
+		DefaultHash:   gocrypto.SHA256,
+		DefaultCipher: packet.CipherAES256,
+	}
 }
 
 func (s *Store) loadKeysFromDir(dir string) (openpgp.EntityList, error) {

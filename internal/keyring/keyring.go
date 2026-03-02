@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -243,7 +244,7 @@ func (kr *Keyring) ExportSecretKey(identifier string, armored bool) ([]byte, err
 		if err != nil {
 			return nil, err
 		}
-		if err := entity.SerializePrivate(w, nil); err != nil {
+		if err := entity.SerializePrivate(w, s2kSerializeConfig()); err != nil {
 			w.Close()
 			return nil, err
 		}
@@ -251,7 +252,7 @@ func (kr *Keyring) ExportSecretKey(identifier string, armored bool) ([]byte, err
 			return nil, fmt.Errorf("finalize armor: %w", err)
 		}
 	} else {
-		if err := entity.SerializePrivate(&buf, nil); err != nil {
+		if err := entity.SerializePrivate(&buf, s2kSerializeConfig()); err != nil {
 			return nil, err
 		}
 	}
@@ -296,7 +297,17 @@ func KeyInfo(entity *openpgp.Entity) string {
 		hasSecret = " [secret]"
 	}
 
-	info := fmt.Sprintf("%s%s/%s %s%s\n", algo, bitStr, keyID, created, hasSecret)
+	expiry := KeyExpiry(entity)
+	expiryStr := ""
+	if !expiry.IsZero() {
+		if IsKeyExpired(entity) {
+			expiryStr = fmt.Sprintf(" [EXPIRED %s]", expiry.Format("2006-01-02"))
+		} else {
+			expiryStr = fmt.Sprintf(" [expires %s]", expiry.Format("2006-01-02"))
+		}
+	}
+
+	info := fmt.Sprintf("%s%s/%s %s%s%s\n", algo, bitStr, keyID, created, hasSecret, expiryStr)
 	for _, uid := range uids {
 		info += fmt.Sprintf("  uid: %s\n", uid)
 	}
@@ -328,7 +339,7 @@ func findKey(keys openpgp.EntityList, identifier string) *openpgp.Entity {
 	upper := strings.ToUpper(identifier)
 	upper = strings.TrimPrefix(upper, "0X")
 
-	// First pass: exact match on key ID or fingerprint
+	// First pass: exact match on key ID or fingerprint (unambiguous)
 	for _, entity := range keys {
 		keyID := entity.PrimaryKey.KeyIdString()
 		fingerprint := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
@@ -338,15 +349,106 @@ func findKey(keys openpgp.EntityList, identifier string) *openpgp.Entity {
 		}
 	}
 
-	// Second pass: substring match on identity names (only if not a hex-like identifier)
+	// Second pass: collect ALL UID matches and return only if exactly one key matches.
+	// This prevents ambiguous substring matches from silently selecting the wrong key.
+	seen := make(map[string]*openpgp.Entity) // fingerprint → entity (dedup)
+	lowerID := strings.ToLower(identifier)
 	for _, entity := range keys {
 		for _, id := range entity.Identities {
-			if strings.Contains(strings.ToLower(id.Name), strings.ToLower(identifier)) {
-				return entity
+			if strings.Contains(strings.ToLower(id.Name), lowerID) {
+				fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
+				seen[fp] = entity
+				break // don't count the same entity twice
+			}
+		}
+	}
+	if len(seen) == 1 {
+		for _, entity := range seen {
+			return entity
+		}
+	}
+	// If 0 or >1 match, return nil — callers should use fingerprints for disambiguation
+	return nil
+}
+
+// EncryptEntityKeys encrypts all private key material in an entity with the
+// given passphrase using S2K key derivation. Both the primary key and all
+// subkeys are encrypted. This should be called before persisting keys to disk.
+func EncryptEntityKeys(entity *openpgp.Entity, passphrase []byte) error {
+	if entity.PrivateKey != nil && !entity.PrivateKey.Encrypted {
+		if err := entity.PrivateKey.Encrypt(passphrase); err != nil {
+			return fmt.Errorf("encrypt primary key: %w", err)
+		}
+	}
+	for i, sub := range entity.Subkeys {
+		if sub.PrivateKey != nil && !sub.PrivateKey.Encrypted {
+			if err := entity.Subkeys[i].PrivateKey.Encrypt(passphrase); err != nil {
+				return fmt.Errorf("encrypt subkey: %w", err)
 			}
 		}
 	}
 	return nil
+}
+
+// DecryptEntityKeys decrypts all private key material in an entity.
+func DecryptEntityKeys(entity *openpgp.Entity, passphrase []byte) error {
+	if entity.PrivateKey != nil && entity.PrivateKey.Encrypted {
+		if err := entity.PrivateKey.Decrypt(passphrase); err != nil {
+			return fmt.Errorf("decrypt primary key: %w", err)
+		}
+	}
+	for i, sub := range entity.Subkeys {
+		if sub.PrivateKey != nil && sub.PrivateKey.Encrypted {
+			if err := entity.Subkeys[i].PrivateKey.Decrypt(passphrase); err != nil {
+				return fmt.Errorf("decrypt subkey: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// IsEntityKeyEncrypted returns true if any private key material in the entity
+// is passphrase-encrypted.
+func IsEntityKeyEncrypted(entity *openpgp.Entity) bool {
+	if entity.PrivateKey != nil && entity.PrivateKey.Encrypted {
+		return true
+	}
+	for _, sub := range entity.Subkeys {
+		if sub.PrivateKey != nil && sub.PrivateKey.Encrypted {
+			return true
+		}
+	}
+	return false
+}
+
+// IsKeyExpired checks if the primary identity's self-signature contains a key
+// expiration time that has passed. Returns true if expired, false otherwise
+// (including when no expiration is set).
+func IsKeyExpired(entity *openpgp.Entity) bool {
+	for _, id := range entity.Identities {
+		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil {
+			expiry := entity.PrimaryKey.CreationTime.Add(
+				time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second,
+			)
+			if time.Now().After(expiry) {
+				return true
+			}
+			return false // found a valid self-sig with expiry, not expired
+		}
+	}
+	return false // no expiration set
+}
+
+// KeyExpiry returns the expiration time of a key, or zero time if none is set.
+func KeyExpiry(entity *openpgp.Entity) time.Time {
+	for _, id := range entity.Identities {
+		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil {
+			return entity.PrimaryKey.CreationTime.Add(
+				time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second,
+			)
+		}
+	}
+	return time.Time{}
 }
 
 func removeKey(keys openpgp.EntityList, keyID string) openpgp.EntityList {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/hamalizer/gpg_go/internal/crypto"
+	"github.com/hamalizer/gpg_go/internal/keyring"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -77,6 +78,19 @@ func newEncryptCmd() *cobra.Command {
 				signer = kr.FindSecretKey(signWith)
 				if signer == nil {
 					return fmt.Errorf("secret key not found for signing: %s", signWith)
+				}
+				// If the signing key is encrypted, prompt for passphrase
+				if keyring.IsEntityKeyEncrypted(signer) {
+					fmt.Fprint(os.Stderr, "Passphrase for signing key: ")
+					sigPass, pErr := readPassphrase()
+					if pErr != nil {
+						return fmt.Errorf("read passphrase: %w", pErr)
+					}
+					fmt.Fprintln(os.Stderr)
+					defer zeroBytes(sigPass)
+					if err := keyring.DecryptEntityKeys(signer, sigPass); err != nil {
+						return fmt.Errorf("unlock signing key: %w", err)
+					}
 				}
 			}
 

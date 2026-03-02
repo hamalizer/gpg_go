@@ -125,7 +125,7 @@ func keyOptionStrings(keys []*openpgp.Entity) []string {
 	options := make([]string, 0, len(keys))
 	for _, e := range keys {
 		uid := keyring.PrimaryUID(e)
-		options = append(options, fmt.Sprintf("%s [%s]", uid, e.PrimaryKey.KeyIdShortString()))
+		options = append(options, fmt.Sprintf("%s [%s]", uid, e.PrimaryKey.KeyIdString()))
 	}
 	return options
 }
@@ -137,6 +137,10 @@ func (a *App) showGenerateDialog(keyList *widget.List) {
 	emailEntry.SetPlaceHolder("john@example.com")
 	commentEntry := widget.NewEntry()
 	commentEntry.SetPlaceHolder("(optional)")
+	passphraseEntry := widget.NewPasswordEntry()
+	passphraseEntry.SetPlaceHolder("Passphrase to protect key (optional)")
+	passphraseConfirm := widget.NewPasswordEntry()
+	passphraseConfirm.SetPlaceHolder("Repeat passphrase")
 	algoSelect := widget.NewSelect(
 		[]string{"Ed25519 (recommended)", "RSA-4096", "RSA-3072", "RSA-2048"},
 		nil,
@@ -148,6 +152,8 @@ func (a *App) showGenerateDialog(keyList *widget.List) {
 			widget.NewFormItem("Name", nameEntry),
 			widget.NewFormItem("Email", emailEntry),
 			widget.NewFormItem("Comment", commentEntry),
+			widget.NewFormItem("Passphrase", passphraseEntry),
+			widget.NewFormItem("Confirm", passphraseConfirm),
 			widget.NewFormItem("Algorithm", algoSelect),
 		},
 		func(ok bool) {
@@ -159,7 +165,13 @@ func (a *App) showGenerateDialog(keyList *widget.List) {
 			name := strings.TrimSpace(nameEntry.Text)
 			email := strings.TrimSpace(emailEntry.Text)
 			comment := strings.TrimSpace(commentEntry.Text)
+			passphrase := []byte(passphraseEntry.Text)
+			passConfirm := []byte(passphraseConfirm.Text)
 			algoIdx := algoSelect.SelectedIndex()
+
+			// Clear passphrase fields from UI
+			passphraseEntry.SetText("")
+			passphraseConfirm.SetText("")
 
 			if name == "" || email == "" {
 				dialog.ShowError(fmt.Errorf("name and email are required"), a.window)
@@ -168,6 +180,19 @@ func (a *App) showGenerateDialog(keyList *widget.List) {
 			if !strings.Contains(email, "@") {
 				dialog.ShowError(fmt.Errorf("invalid email address"), a.window)
 				return
+			}
+			if len(passphrase) > 0 && string(passphrase) != string(passConfirm) {
+				for i := range passphrase {
+					passphrase[i] = 0
+				}
+				for i := range passConfirm {
+					passConfirm[i] = 0
+				}
+				dialog.ShowError(fmt.Errorf("passphrases do not match"), a.window)
+				return
+			}
+			for i := range passConfirm {
+				passConfirm[i] = 0
 			}
 
 			algo := crypto.AlgoEd25519
@@ -184,11 +209,18 @@ func (a *App) showGenerateDialog(keyList *widget.List) {
 			progress.Show()
 
 			go func() {
+				defer func() {
+					for i := range passphrase {
+						passphrase[i] = 0
+					}
+				}()
+
 				entity, err := crypto.GenerateKey(crypto.KeyGenParams{
-					Name:      name,
-					Comment:   comment,
-					Email:     email,
-					Algorithm: algo,
+					Name:       name,
+					Comment:    comment,
+					Email:      email,
+					Algorithm:  algo,
+					Passphrase: passphrase,
 				})
 				progress.Hide()
 
@@ -210,7 +242,7 @@ func (a *App) showGenerateDialog(keyList *widget.List) {
 		},
 		a.window,
 	)
-	form.Resize(fyne.NewSize(450, 350))
+	form.Resize(fyne.NewSize(450, 400))
 	form.Show()
 }
 

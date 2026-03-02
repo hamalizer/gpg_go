@@ -166,7 +166,7 @@ func (a *App) getSecretKeyOptions() []string {
 	var options []string
 	for _, e := range a.kr.SecretKeys() {
 		uid := keyring.PrimaryUID(e)
-		options = append(options, fmt.Sprintf("%s [%s]", uid, e.PrimaryKey.KeyIdShortString()))
+		options = append(options, fmt.Sprintf("%s [%s]", uid, e.PrimaryKey.KeyIdString()))
 	}
 	return options
 }

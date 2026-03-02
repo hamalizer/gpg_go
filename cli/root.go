@@ -70,6 +70,8 @@ SHA-256 hashing, HKP keyserver protocol, and ASCII armor.`,
 		newSearchKeysCmd(),
 		newRecvKeysCmd(),
 		newSendKeysCmd(),
+		newEditTrustCmd(),
+		newListTrustCmd(),
 	)
 
 	return root

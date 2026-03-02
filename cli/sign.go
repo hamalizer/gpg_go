@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"os"
 
 	"github.com/hamalizer/gpg_go/internal/crypto"
+	"github.com/hamalizer/gpg_go/internal/keyring"
 	"github.com/spf13/cobra"
 )
 
@@ -38,6 +40,21 @@ func newSignCmd() *cobra.Command {
 					signer = secKeys[0]
 				} else {
 					return fmt.Errorf("secret key not found: %s", localUser)
+				}
+			}
+
+			// If the signing key is encrypted, prompt for passphrase
+			if keyring.IsEntityKeyEncrypted(signer) {
+				fmt.Fprint(os.Stderr, "Passphrase: ")
+				passphrase, pErr := readPassphrase()
+				if pErr != nil {
+					return fmt.Errorf("read passphrase: %w", pErr)
+				}
+				fmt.Fprintln(os.Stderr)
+				defer zeroBytes(passphrase)
+
+				if err := keyring.DecryptEntityKeys(signer, passphrase); err != nil {
+					return fmt.Errorf("unlock signing key: %w", err)
 				}
 			}
 

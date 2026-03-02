@@ -2,12 +2,15 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/hamalizer/gpg_go/internal/crypto"
 	"github.com/hamalizer/gpg_go/internal/keyring"
+	"github.com/hamalizer/gpg_go/internal/trustdb"
 	"github.com/spf13/cobra"
 )
 
@@ -18,6 +21,7 @@ func newGenerateCmd() *cobra.Command {
 		comment string
 		algo    string
 		quick   bool
+		expire  string
 	)
 
 	cmd := &cobra.Command{
@@ -87,13 +91,48 @@ func newGenerateCmd() *cobra.Command {
 
 			algorithm := parseAlgorithm(algo)
 
+			// Prompt for passphrase to protect the private key
+			fmt.Fprint(os.Stderr, "Passphrase (empty for no passphrase): ")
+			passphrase, err := readPassphrase()
+			if err != nil {
+				return fmt.Errorf("read passphrase: %w", err)
+			}
+			fmt.Fprintln(os.Stderr)
+
+			if len(passphrase) > 0 {
+				fmt.Fprint(os.Stderr, "Repeat passphrase: ")
+				passphrase2, err := readPassphrase()
+				if err != nil {
+					return fmt.Errorf("read passphrase: %w", err)
+				}
+				fmt.Fprintln(os.Stderr)
+				if !bytes.Equal(passphrase, passphrase2) {
+					zeroBytes(passphrase)
+					zeroBytes(passphrase2)
+					return fmt.Errorf("passphrases do not match")
+				}
+				zeroBytes(passphrase2)
+			}
+			defer zeroBytes(passphrase)
+
 			fmt.Printf("Generating %s key for %s <%s>...\n", algorithm, name, email)
 
+			var lifetime time.Duration
+			if expire != "" {
+				d, pErr := time.ParseDuration(expire)
+				if pErr != nil {
+					return fmt.Errorf("invalid --expire duration (e.g. 8760h for 1 year): %w", pErr)
+				}
+				lifetime = d
+			}
+
 			entity, err := crypto.GenerateKey(crypto.KeyGenParams{
-				Name:      name,
-				Comment:   comment,
-				Email:     email,
-				Algorithm: algorithm,
+				Name:       name,
+				Comment:    comment,
+				Email:      email,
+				Algorithm:  algorithm,
+				Passphrase: passphrase,
+				Lifetime:   lifetime,
 			})
 			if err != nil {
 				return fmt.Errorf("key generation failed: %w", err)
@@ -101,6 +140,12 @@ func newGenerateCmd() *cobra.Command {
 
 			if err := kr.AddEntity(entity); err != nil {
 				return fmt.Errorf("save key: %w", err)
+			}
+
+			// Mark own key as ultimate trust
+			if err := initTrustDB(); err == nil {
+				fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
+				_ = trustDB.SetTrust(fp, trustdb.TrustUltimate)
 			}
 
 			fmt.Println("\nKey generated successfully!")
@@ -115,6 +160,7 @@ func newGenerateCmd() *cobra.Command {
 	// No default -- empty means "prompt in interactive mode" or "default to ed25519 in quick mode"
 	cmd.Flags().StringVar(&algo, "algo", "", "algorithm: ed25519, rsa4096, rsa3072, rsa2048")
 	cmd.Flags().BoolVar(&quick, "quick", false, "skip interactive prompts (requires --name and --email)")
+	cmd.Flags().StringVar(&expire, "expire", "", "key lifetime (e.g. 8760h for 1 year, 17520h for 2 years)")
 
 	return cmd
 }

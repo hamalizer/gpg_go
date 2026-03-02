@@ -4,6 +4,7 @@ package crypto
 import (
 	gocrypto "crypto"
 	"fmt"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
@@ -34,10 +35,12 @@ func (a KeyAlgorithm) String() string {
 }
 
 type KeyGenParams struct {
-	Name      string
-	Comment   string
-	Email     string
-	Algorithm KeyAlgorithm
+	Name       string
+	Comment    string
+	Email      string
+	Algorithm  KeyAlgorithm
+	Passphrase []byte        // If non-nil, encrypts the private key with S2K
+	Lifetime   time.Duration // If >0, sets key expiration (e.g. 365*24h for 1 year)
 }
 
 func GenerateKey(params KeyGenParams) (*openpgp.Entity, error) {
@@ -51,6 +54,11 @@ func GenerateKey(params KeyGenParams) (*openpgp.Entity, error) {
 	cfg := &packet.Config{
 		DefaultHash:   gocrypto.SHA256,
 		DefaultCipher: packet.CipherAES256,
+	}
+
+	if params.Lifetime > 0 {
+		secs := uint32(params.Lifetime.Seconds())
+		cfg.KeyLifetimeSecs = secs
 	}
 
 	switch params.Algorithm {
@@ -72,6 +80,22 @@ func GenerateKey(params KeyGenParams) (*openpgp.Entity, error) {
 	entity, err := openpgp.NewEntity(params.Name, params.Comment, params.Email, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("generate key: %w", err)
+	}
+
+	// Encrypt the private key material with S2K if a passphrase was provided
+	if len(params.Passphrase) > 0 {
+		if entity.PrivateKey != nil {
+			if err := entity.PrivateKey.Encrypt(params.Passphrase); err != nil {
+				return nil, fmt.Errorf("encrypt primary key: %w", err)
+			}
+		}
+		for i, sub := range entity.Subkeys {
+			if sub.PrivateKey != nil {
+				if err := entity.Subkeys[i].PrivateKey.Encrypt(params.Passphrase); err != nil {
+					return nil, fmt.Errorf("encrypt subkey: %w", err)
+				}
+			}
+		}
 	}
 
 	return entity, nil

@@ -192,7 +192,7 @@ func (a *App) getKeyOptions() []string {
 		}
 		seen[fp] = true
 		uid := keyring.PrimaryUID(e)
-		options = append(options, fmt.Sprintf("%s [%s]", uid, e.PrimaryKey.KeyIdShortString()))
+		options = append(options, fmt.Sprintf("%s [%s]", uid, e.PrimaryKey.KeyIdString()))
 	}
 	return options
 }

@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	gocrypto "crypto"
 	"fmt"
 	"io"
 
@@ -34,7 +35,10 @@ func VerifyDetached(signed io.Reader, signature io.Reader, keyring openpgp.KeyRi
 		sigReader = bytes.NewReader(sigData)
 	}
 
-	signer, err := openpgp.CheckDetachedSignature(keyring, signed, sigReader, &packet.Config{})
+	signer, err := openpgp.CheckDetachedSignature(keyring, signed, sigReader, &packet.Config{
+		DefaultHash:   gocrypto.SHA256,
+		DefaultCipher: packet.CipherAES256,
+	})
 	if err != nil {
 		return &VerifyResult{
 			Valid:   false,
@@ -74,7 +78,10 @@ func VerifyInline(signedMsg io.Reader, keyring openpgp.KeyRing) (*VerifyResult, 
 		reader = bytes.NewReader(data)
 	}
 
-	md, err := openpgp.ReadMessage(reader, keyring, nil, &packet.Config{})
+	md, err := openpgp.ReadMessage(reader, keyring, nil, &packet.Config{
+		DefaultHash:   gocrypto.SHA256,
+		DefaultCipher: packet.CipherAES256,
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("read signed message: %w", err)
 	}

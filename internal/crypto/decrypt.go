@@ -96,6 +96,8 @@ func Decrypt(ciphertext io.Reader, keyring openpgp.KeyRing, passphrase []byte) (
 
 func isArmored(data []byte) bool {
 	// Trim leading whitespace/newlines, then check for armor header prefix.
-	trimmed := bytes.TrimLeft(data[:min(len(data), 100)], " \t\r\n")
+	// Check up to 1024 bytes to handle files with leading whitespace/garbage.
+	limit := min(len(data), 1024)
+	trimmed := bytes.TrimLeft(data[:limit], " \t\r\n")
 	return bytes.HasPrefix(trimmed, []byte("-----BEGIN PGP"))
 }

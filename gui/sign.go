@@ -24,6 +24,7 @@ func (a *App) buildSignTab() fyne.CanvasObject {
 	signOutput.SetMinRowsVisible(8)
 
 	signerSelect := widget.NewSelect(a.getSecretKeyOptions(), nil)
+	a.signerSelect = signerSelect // R2-L-04: Store reference for cross-tab refresh
 	if len(a.kr.SecretKeys()) > 0 {
 		signerSelect.SetSelectedIndex(0)
 	}
@@ -134,7 +135,7 @@ func (a *App) buildSignTab() fyne.CanvasObject {
 		result, err := crypto.VerifyDetached(
 			strings.NewReader(verifyMsg.Text),
 			strings.NewReader(verifySig.Text),
-			a.kr.AllKeys(),
+			a.kr.PublicKeys(),
 		)
 		if err != nil {
 			dialog.ShowError(err, a.window)
@@ -156,7 +157,7 @@ func (a *App) buildSignTab() fyne.CanvasObject {
 
 		result, plaintext, err := crypto.VerifyInline(
 			bytes.NewReader([]byte(verifySig.Text)),
-			a.kr.AllKeys(),
+			a.kr.PublicKeys(),
 		)
 		if err != nil {
 			dialog.ShowError(err, a.window)

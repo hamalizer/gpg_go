@@ -77,6 +77,7 @@ SHA-256 hashing, HKP keyserver protocol, and ASCII armor.`,
 		newGitCmd(),
 		newAuditCmd(),
 		newAgentCmd(),
+		newRevokeCmd(),
 	)
 
 	return root

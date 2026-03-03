@@ -23,7 +23,9 @@ For detached signatures: gpg-go verify signature.sig file.txt
 For inline signatures:   gpg-go verify signed-message.gpg`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			allKeys := kr.AllKeys()
+			// M-05: Use PublicKeys() for verification — secret key material
+			// is not needed and should not be loaded into memory.
+			pubKeys := kr.PublicKeys()
 
 			if len(args) == 2 {
 				// Detached signature verification
@@ -40,7 +42,7 @@ For inline signatures:   gpg-go verify signed-message.gpg`,
 				result, err := crypto.VerifyDetached(
 					bytes.NewReader(signedData),
 					bytes.NewReader(sigData),
-					allKeys,
+					pubKeys,
 				)
 				if err != nil {
 					return err
@@ -69,7 +71,7 @@ For inline signatures:   gpg-go verify signed-message.gpg`,
 
 			result, plaintext, err := crypto.VerifyInline(
 				bytes.NewReader(sigData),
-				allKeys,
+				pubKeys,
 			)
 			if err != nil {
 				return err

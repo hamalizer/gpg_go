@@ -6,6 +6,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 	"github.com/hamalizer/gpg_go/internal/config"
 	"github.com/hamalizer/gpg_go/internal/keyring"
 )
@@ -15,6 +16,12 @@ type App struct {
 	window  fyne.Window
 	cfg     *config.Config
 	kr      *keyring.Keyring
+
+	// R2-L-04: References to widgets that need refreshing after key operations.
+	keyList        *widget.List
+	recipientCheck *widget.CheckGroup
+	signerSelect   *widget.Select
+	sendSelect     *widget.Select
 }
 
 func Run(cfg *config.Config, kr *keyring.Keyring) {
@@ -39,4 +46,24 @@ func Run(cfg *config.Config, kr *keyring.Keyring) {
 
 	a.window.SetContent(tabs)
 	a.window.ShowAndRun()
+}
+
+// refreshKeyWidgets updates all widgets that display key lists (R2-L-04).
+// Call this after generating, importing, deleting, or receiving keys.
+func (a *App) refreshKeyWidgets() {
+	if a.keyList != nil {
+		a.keyList.Refresh()
+	}
+	if a.recipientCheck != nil {
+		a.recipientCheck.Options = a.getKeyOptions()
+		a.recipientCheck.Refresh()
+	}
+	if a.signerSelect != nil {
+		a.signerSelect.Options = a.getSecretKeyOptions()
+		a.signerSelect.Refresh()
+	}
+	if a.sendSelect != nil {
+		a.sendSelect.Options = a.getKeyOptions()
+		a.sendSelect.Refresh()
+	}
 }

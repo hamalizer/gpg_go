@@ -41,6 +41,12 @@ func newEncryptCmd() *cobra.Command {
 				fmt.Fprintln(os.Stderr)
 				defer zeroBytes(passphrase)
 
+				if len(passphrase) == 0 {
+					fmt.Fprintln(os.Stderr, "WARNING: empty passphrase provides no security")
+				} else if len(passphrase) < 8 {
+					fmt.Fprintln(os.Stderr, "WARNING: passphrase is very short (< 8 characters)")
+				}
+
 				fmt.Fprint(os.Stderr, "Repeat passphrase: ")
 				passphrase2, err := readPassphrase()
 				if err != nil {
@@ -71,6 +77,21 @@ func newEncryptCmd() *cobra.Command {
 					return fmt.Errorf("public key not found for recipient: %s", r)
 				}
 				recipientEntities = append(recipientEntities, entity)
+			}
+
+			// R2-L-03: Check trust levels and warn for untrusted recipients.
+			if err := initTrustDB(); err == nil && trustDB != nil {
+				for _, entity := range recipientEntities {
+					fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
+					level := trustDB.GetTrust(fp)
+					uid := keyring.PrimaryUID(entity)
+					switch {
+					case level == 1: // TrustNever
+						fmt.Fprintf(os.Stderr, "WARNING: recipient %s is explicitly UNTRUSTED\n", uid)
+					case level == 0: // TrustUnknown
+						fmt.Fprintf(os.Stderr, "WARNING: recipient %s has unknown trust level\n", uid)
+					}
+				}
 			}
 
 			var signer *openpgp.Entity
@@ -137,12 +158,21 @@ func readInput(args []string) ([]byte, error) {
 }
 
 // readPassphrase reads a passphrase from the terminal with echo disabled.
+//
+// NOTE: Go's garbage collector may copy the returned byte slice during
+// compaction. zeroBytes() only clears the current copy, not any prior GC
+// copies. This is a fundamental limitation of Go — true memory pinning
+// requires mlock(2) via cgo/unsafe, which is out of scope for this tool.
+// The window of exposure is small (GC'd memory is quickly reused), and
+// this matches the tradeoff made by most Go crypto tools including age.
 func readPassphrase() ([]byte, error) {
 	fd := int(os.Stdin.Fd())
 	if term.IsTerminal(fd) {
 		return term.ReadPassword(fd)
 	}
-	// Not a terminal (piped input) - read a line
+	// Not a terminal (piped input). Warn that the passphrase may be visible
+	// in process listings if piped via echo or heredoc.
+	fmt.Fprintln(os.Stderr, "WARNING: reading passphrase from non-terminal input")
 	var buf []byte
 	b := make([]byte, 1)
 	for {

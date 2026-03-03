@@ -3,6 +3,7 @@ package gui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -99,6 +100,7 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 					return
 				}
 			}
+			a.refreshKeyWidgets()
 			dialog.ShowInformation("Success",
 				fmt.Sprintf("Imported %d key(s) from keyserver", len(entities)),
 				a.window)
@@ -107,6 +109,7 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 
 	// --- Send ---
 	sendSelect := widget.NewSelect(a.getKeyOptions(), nil)
+	a.sendSelect = sendSelect // R2-L-04: Store reference for cross-tab refresh
 	if len(a.kr.PublicKeys()) > 0 {
 		sendSelect.SetSelectedIndex(0)
 	}
@@ -158,7 +161,8 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 
 		go func() {
 			updated := 0
-			for _, entity := range a.kr.PublicKeys() {
+			pubKeys := a.kr.PublicKeys()
+			for i, entity := range pubKeys {
 				keyID := entity.PrimaryKey.KeyIdString()
 				entities, err := client.FetchKey(keyID)
 				if err != nil {
@@ -168,6 +172,11 @@ func (a *App) buildKeyserverTab() fyne.CanvasObject {
 					if err := a.kr.AddEntity(e); err == nil {
 						updated++
 					}
+				}
+				// R2-L-02: Rate-limit requests to avoid triggering keyserver
+				// IP blocking. Skip the sleep after the last key.
+				if i < len(pubKeys)-1 {
+					time.Sleep(200 * time.Millisecond)
 				}
 			}
 

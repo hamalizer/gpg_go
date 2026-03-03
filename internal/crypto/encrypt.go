@@ -5,11 +5,11 @@ import (
 	gocrypto "crypto"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
+	"github.com/hamalizer/gpg_go/internal/keyring"
 )
 
 type EncryptParams struct {
@@ -25,7 +25,7 @@ func Encrypt(plaintext io.Reader, params EncryptParams) ([]byte, error) {
 
 	// Reject expired recipient keys
 	for _, r := range params.Recipients {
-		if isEntityExpired(r) {
+		if keyring.IsKeyExpired(r) {
 			uid := ""
 			for _, id := range r.Identities {
 				uid = id.Name
@@ -36,7 +36,7 @@ func Encrypt(plaintext io.Reader, params EncryptParams) ([]byte, error) {
 	}
 
 	// Reject expired signer key
-	if params.Signer != nil && isEntityExpired(params.Signer) {
+	if params.Signer != nil && keyring.IsKeyExpired(params.Signer) {
 		return nil, fmt.Errorf("signing key expired: %s", params.Signer.PrimaryKey.KeyIdString())
 	}
 
@@ -81,25 +81,12 @@ func Encrypt(plaintext io.Reader, params EncryptParams) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-// isEntityExpired checks if the entity's primary identity self-signature
-// contains an expiration time that has passed.
-func isEntityExpired(entity *openpgp.Entity) bool {
-	for _, id := range entity.Identities {
-		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil && *id.SelfSignature.KeyLifetimeSecs > 0 {
-			expiry := entity.PrimaryKey.CreationTime.Add(
-				time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second,
-			)
-			return time.Now().After(expiry)
-		}
-	}
-	return false
-}
-
 // EncryptSymmetric encrypts data with a passphrase (symmetric encryption).
 func EncryptSymmetric(plaintext io.Reader, passphrase []byte, useArmor bool) ([]byte, error) {
 	cfg := &packet.Config{
 		DefaultHash:   gocrypto.SHA256,
 		DefaultCipher: packet.CipherAES256,
+		S2KCount:      65536, // Pin S2K iteration count to prevent downgrade on library updates
 	}
 
 	var output bytes.Buffer

@@ -5,12 +5,12 @@ import (
 	gocrypto "crypto"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
+	"github.com/hamalizer/gpg_go/internal/keyring"
 )
 
 type SignParams struct {
@@ -30,7 +30,7 @@ func Sign(data io.Reader, params SignParams) ([]byte, error) {
 		return nil, fmt.Errorf("private key required for signing")
 	}
 
-	if isSignerExpired(params.Signer) {
+	if keyring.IsKeyExpired(params.Signer) {
 		return nil, fmt.Errorf("signing key expired: %s", params.Signer.PrimaryKey.KeyIdString())
 	}
 
@@ -129,16 +129,4 @@ func inlineSign(data io.Reader, params SignParams, cfg *packet.Config) ([]byte, 
 	}
 
 	return output.Bytes(), nil
-}
-
-func isSignerExpired(entity *openpgp.Entity) bool {
-	for _, id := range entity.Identities {
-		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil && *id.SelfSignature.KeyLifetimeSecs > 0 {
-			expiry := entity.PrimaryKey.CreationTime.Add(
-				time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second,
-			)
-			return time.Now().After(expiry)
-		}
-	}
-	return false
 }

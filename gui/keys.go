@@ -16,6 +16,7 @@ import (
 
 func (a *App) buildKeysTab() fyne.CanvasObject {
 	keyList := widget.NewList(
+
 		func() int {
 			return len(a.getAllKeys())
 		},
@@ -48,6 +49,8 @@ func (a *App) buildKeysTab() fyne.CanvasObject {
 				entity.PrimaryKey.CreationTime.Format("2006-01-02")))
 		},
 	)
+
+	a.keyList = keyList // R2-L-04: Store reference for cross-tab refresh
 
 	detailBox := widget.NewMultiLineEntry()
 	detailBox.Wrapping = fyne.TextWrapWord
@@ -234,7 +237,7 @@ func (a *App) showGenerateDialog(keyList *widget.List) {
 					return
 				}
 
-				keyList.Refresh()
+				a.refreshKeyWidgets()
 				dialog.ShowInformation("Success",
 					fmt.Sprintf("Key generated!\n\n%s", keyring.KeyInfo(entity)),
 					a.window)
@@ -266,7 +269,7 @@ func (a *App) showImportDialog(keyList *widget.List) {
 				return
 			}
 
-			keyList.Refresh()
+			a.refreshKeyWidgets()
 			dialog.ShowInformation("Imported",
 				fmt.Sprintf("Imported %d key(s)", len(imported)),
 				a.window)
@@ -362,7 +365,7 @@ func (a *App) showDeleteDialog(keyList *widget.List) {
 					if len(errs) > 0 {
 						dialog.ShowError(fmt.Errorf("delete errors: %s", strings.Join(errs, "; ")), a.window)
 					}
-					keyList.Refresh()
+					a.refreshKeyWidgets()
 				},
 				a.window,
 			)

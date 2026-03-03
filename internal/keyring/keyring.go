@@ -358,16 +358,45 @@ func findKey(keys openpgp.EntityList, identifier string) *openpgp.Entity {
 		}
 	}
 
-	// Second pass: collect ALL UID matches and return only if exactly one key matches.
-	// This prevents ambiguous substring matches from silently selecting the wrong key.
-	seen := make(map[string]*openpgp.Entity) // fingerprint → entity (dedup)
+	// Second pass: exact email match (preferred over substring)
 	lowerID := strings.ToLower(identifier)
+	for _, entity := range keys {
+		for _, id := range entity.Identities {
+			// Extract email from UID format "Name (Comment) <email>"
+			name := id.Name
+			if emailStart := strings.LastIndex(name, "<"); emailStart >= 0 {
+				if emailEnd := strings.LastIndex(name, ">"); emailEnd > emailStart {
+					email := strings.ToLower(name[emailStart+1 : emailEnd])
+					if email == lowerID {
+						return entity
+					}
+				}
+			}
+		}
+	}
+
+	// Third pass: exact name match
+	for _, entity := range keys {
+		for _, id := range entity.Identities {
+			name := id.Name
+			// Strip email portion for name comparison
+			if idx := strings.LastIndex(name, "<"); idx > 0 {
+				name = strings.TrimSpace(name[:idx])
+			}
+			if strings.EqualFold(name, identifier) {
+				return entity
+			}
+		}
+	}
+
+	// Fourth pass: substring match, but only if exactly one key matches.
+	seen := make(map[string]*openpgp.Entity)
 	for _, entity := range keys {
 		for _, id := range entity.Identities {
 			if strings.Contains(strings.ToLower(id.Name), lowerID) {
 				fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
 				seen[fp] = entity
-				break // don't count the same entity twice
+				break
 			}
 		}
 	}
@@ -376,7 +405,6 @@ func findKey(keys openpgp.EntityList, identifier string) *openpgp.Entity {
 			return entity
 		}
 	}
-	// If 0 or >1 match, return nil — callers should use fingerprints for disambiguation
 	return nil
 }
 

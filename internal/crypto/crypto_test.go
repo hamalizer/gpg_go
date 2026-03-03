@@ -9,120 +9,178 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 )
 
-// testEntity generates a fresh Ed25519 key pair for testing.
-func testEntity(t *testing.T) *openpgp.Entity {
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+// genEd25519 generates a fresh Ed25519 key pair for testing.
+func genEd25519(t *testing.T, name, email string) *openpgp.Entity {
 	t.Helper()
-	entity, err := GenerateKey(KeyGenParams{
-		Name:      "Test User",
-		Email:     "test@example.com",
-		Algorithm: AlgoEd25519,
-	})
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-	return entity
-}
-
-// --- Key Generation Tests ---
-
-func TestGenerateKeyEd25519(t *testing.T) {
-	entity, err := GenerateKey(KeyGenParams{
-		Name:      "Ed User",
-		Email:     "ed@example.com",
+	e, err := GenerateKey(KeyGenParams{
+		Name:      name,
+		Email:     email,
 		Algorithm: AlgoEd25519,
 	})
 	if err != nil {
 		t.Fatalf("generate Ed25519 key: %v", err)
 	}
-	if entity.PrivateKey == nil {
-		t.Fatal("expected private key")
-	}
-	if entity.PrimaryKey.PubKeyAlgo != 22 { // EdDSA
-		t.Errorf("expected EdDSA algo (22), got %d", entity.PrimaryKey.PubKeyAlgo)
-	}
+	return e
 }
 
-func TestGenerateKeyRSA4096(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping RSA key generation in short mode")
-	}
-	entity, err := GenerateKey(KeyGenParams{
-		Name:      "RSA User",
-		Email:     "rsa@example.com",
+// genRSA4096 generates a fresh RSA-4096 key pair for testing.
+func genRSA4096(t *testing.T, name, email string) *openpgp.Entity {
+	t.Helper()
+	e, err := GenerateKey(KeyGenParams{
+		Name:      name,
+		Email:     email,
 		Algorithm: AlgoRSA4096,
 	})
 	if err != nil {
 		t.Fatalf("generate RSA-4096 key: %v", err)
 	}
-	if entity.PrivateKey == nil {
-		t.Fatal("expected private key")
+	return e
+}
+
+// entityList wraps entities into an openpgp.EntityList (implements
+// openpgp.KeyRing).
+func entityList(entities ...*openpgp.Entity) openpgp.EntityList {
+	return openpgp.EntityList(entities)
+}
+
+// ---------------------------------------------------------------------------
+// 1. Key generation
+// ---------------------------------------------------------------------------
+
+func TestGenerateKey_Ed25519(t *testing.T) {
+	e := genEd25519(t, "Alice", "alice@example.com")
+	if e.PrivateKey == nil {
+		t.Fatal("expected private key to be present")
+	}
+	if len(e.Identities) == 0 {
+		t.Fatal("expected at least one identity")
+	}
+	for _, id := range e.Identities {
+		if !strings.Contains(id.Name, "Alice") {
+			t.Errorf("identity name %q does not contain Alice", id.Name)
+		}
+		break
+	}
+	// Verify the algorithm is EdDSA (22).
+	if e.PrimaryKey.PubKeyAlgo != 22 {
+		t.Errorf("expected EdDSA algo (22), got %d", e.PrimaryKey.PubKeyAlgo)
 	}
 }
 
-func TestGenerateKeyWithPassphrase(t *testing.T) {
-	entity, err := GenerateKey(KeyGenParams{
-		Name:       "Pass User",
-		Email:      "pass@example.com",
-		Algorithm:  AlgoEd25519,
-		Passphrase: []byte("testpassphrase"),
-	})
-	if err != nil {
-		t.Fatalf("generate key with passphrase: %v", err)
+func TestGenerateKey_RSA4096(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping RSA-4096 key generation in short mode")
 	}
-	if !entity.PrivateKey.Encrypted {
-		t.Error("expected primary key to be encrypted")
+	e := genRSA4096(t, "Bob", "bob@example.com")
+	if e.PrivateKey == nil {
+		t.Fatal("expected private key to be present")
+	}
+	if len(e.Identities) == 0 {
+		t.Fatal("expected at least one identity")
 	}
 }
 
-func TestGenerateKeyWithExpiry(t *testing.T) {
-	entity, err := GenerateKey(KeyGenParams{
-		Name:      "Expiring User",
+func TestGenerateKey_WithExpiry(t *testing.T) {
+	lifetime := 365 * 24 * time.Hour
+	e, err := GenerateKey(KeyGenParams{
+		Name:      "Expiry Test",
 		Email:     "expiry@example.com",
 		Algorithm: AlgoEd25519,
-		Lifetime:  365 * 24 * time.Hour, // 1 year
+		Lifetime:  lifetime,
 	})
 	if err != nil {
 		t.Fatalf("generate key with expiry: %v", err)
 	}
-	for _, id := range entity.Identities {
-		if id.SelfSignature == nil || id.SelfSignature.KeyLifetimeSecs == nil {
-			t.Fatal("expected key lifetime to be set")
+	for _, id := range e.Identities {
+		if id.SelfSignature == nil {
+			t.Fatal("expected self-signature")
 		}
-		if *id.SelfSignature.KeyLifetimeSecs == 0 {
-			t.Error("expected non-zero key lifetime")
+		if id.SelfSignature.KeyLifetimeSecs == nil || *id.SelfSignature.KeyLifetimeSecs == 0 {
+			t.Fatal("expected non-zero KeyLifetimeSecs on self-signature")
+		}
+		got := time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second
+		if got != lifetime {
+			t.Errorf("expected lifetime %v, got %v", lifetime, got)
 		}
 		break
 	}
 }
 
-func TestGenerateKeyMissingName(t *testing.T) {
+func TestGenerateKey_NoExpiry(t *testing.T) {
+	e := genEd25519(t, "NoExpiry", "noexpiry@example.com")
+	for _, id := range e.Identities {
+		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil && *id.SelfSignature.KeyLifetimeSecs > 0 {
+			t.Fatal("expected no expiry on key")
+		}
+		break
+	}
+}
+
+func TestGenerateKey_WithPassphrase(t *testing.T) {
+	passphrase := []byte("super-secret")
+	e, err := GenerateKey(KeyGenParams{
+		Name:       "Passphrase User",
+		Email:      "pass@example.com",
+		Algorithm:  AlgoEd25519,
+		Passphrase: passphrase,
+	})
+	if err != nil {
+		t.Fatalf("generate key with passphrase: %v", err)
+	}
+	if e.PrivateKey == nil {
+		t.Fatal("expected private key to be present")
+	}
+	if !e.PrivateKey.Encrypted {
+		t.Fatal("expected primary private key to be encrypted")
+	}
+	for _, sub := range e.Subkeys {
+		if sub.PrivateKey != nil && !sub.PrivateKey.Encrypted {
+			t.Fatal("expected subkey private key to be encrypted")
+		}
+	}
+}
+
+func TestGenerateKey_WithoutPassphrase(t *testing.T) {
+	e := genEd25519(t, "NoPass", "nopass@example.com")
+	if e.PrivateKey.Encrypted {
+		t.Fatal("expected primary private key to NOT be encrypted")
+	}
+}
+
+func TestGenerateKey_MissingName(t *testing.T) {
 	_, err := GenerateKey(KeyGenParams{
 		Email:     "noname@example.com",
 		Algorithm: AlgoEd25519,
 	})
 	if err == nil {
-		t.Fatal("expected error for missing name")
+		t.Fatal("expected error when name is empty")
 	}
 }
 
-func TestGenerateKeyMissingEmail(t *testing.T) {
+func TestGenerateKey_MissingEmail(t *testing.T) {
 	_, err := GenerateKey(KeyGenParams{
-		Name:      "No Email",
+		Name:      "NoEmail",
 		Algorithm: AlgoEd25519,
 	})
 	if err == nil {
-		t.Fatal("expected error for missing email")
+		t.Fatal("expected error when email is empty")
 	}
 }
 
-// --- Encrypt/Decrypt Round-Trip Tests ---
+// ---------------------------------------------------------------------------
+// 2. Encrypt / Decrypt round-trip
+// ---------------------------------------------------------------------------
 
-func TestEncryptDecryptArmored(t *testing.T) {
-	entity := testEntity(t)
-	plaintext := "Hello, world! This is a test message."
+func TestEncryptDecrypt_Armored(t *testing.T) {
+	key := genEd25519(t, "EncTest", "enc@example.com")
+	original := "Hello, armored encryption!"
 
-	ciphertext, err := Encrypt(strings.NewReader(plaintext), EncryptParams{
-		Recipients: []*openpgp.Entity{entity},
+	ciphertext, err := Encrypt(strings.NewReader(original), EncryptParams{
+		Recipients: []*openpgp.Entity{key},
 		Armor:      true,
 	})
 	if err != nil {
@@ -130,240 +188,183 @@ func TestEncryptDecryptArmored(t *testing.T) {
 	}
 
 	if !bytes.Contains(ciphertext, []byte("-----BEGIN PGP MESSAGE-----")) {
-		t.Error("expected armored output")
+		t.Fatal("expected armored output")
 	}
 
-	result, err := Decrypt(bytes.NewReader(ciphertext), openpgp.EntityList{entity}, nil)
+	result, err := Decrypt(bytes.NewReader(ciphertext), entityList(key), nil)
 	if err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}
-
-	if string(result.Plaintext) != plaintext {
-		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, plaintext)
+	if string(result.Plaintext) != original {
+		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, original)
+	}
+	if !result.Encrypted {
+		t.Error("expected Encrypted flag to be true")
 	}
 }
 
-func TestEncryptDecryptBinary(t *testing.T) {
-	entity := testEntity(t)
-	plaintext := "Binary mode test."
+func TestEncryptDecrypt_Binary(t *testing.T) {
+	key := genEd25519(t, "BinEnc", "binenc@example.com")
+	original := "Hello, binary encryption!"
 
-	ciphertext, err := Encrypt(strings.NewReader(plaintext), EncryptParams{
-		Recipients: []*openpgp.Entity{entity},
+	ciphertext, err := Encrypt(strings.NewReader(original), EncryptParams{
+		Recipients: []*openpgp.Entity{key},
 		Armor:      false,
 	})
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
 
-	if bytes.Contains(ciphertext, []byte("-----BEGIN")) {
-		t.Error("expected non-armored output")
+	if bytes.Contains(ciphertext, []byte("-----BEGIN PGP")) {
+		t.Fatal("expected binary (non-armored) output")
 	}
 
-	result, err := Decrypt(bytes.NewReader(ciphertext), openpgp.EntityList{entity}, nil)
+	result, err := Decrypt(bytes.NewReader(ciphertext), entityList(key), nil)
 	if err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}
-
-	if string(result.Plaintext) != plaintext {
-		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, plaintext)
+	if string(result.Plaintext) != original {
+		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, original)
 	}
 }
 
-func TestEncryptDecryptSymmetric(t *testing.T) {
-	passphrase := []byte("symmetric-test-pass")
-	plaintext := "Symmetric encryption test."
+func TestEncryptDecrypt_SignedAndEncrypted(t *testing.T) {
+	sender := genEd25519(t, "Sender", "sender@example.com")
+	recipient := genEd25519(t, "Recipient", "recipient@example.com")
+	original := "signed and encrypted payload"
 
-	ciphertext, err := EncryptSymmetric(strings.NewReader(plaintext), passphrase, true)
-	if err != nil {
-		t.Fatalf("symmetric encrypt: %v", err)
-	}
-
-	result, err := Decrypt(bytes.NewReader(ciphertext), openpgp.EntityList{}, passphrase)
-	if err != nil {
-		t.Fatalf("symmetric decrypt: %v", err)
-	}
-
-	if string(result.Plaintext) != plaintext {
-		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, plaintext)
-	}
-}
-
-func TestEncryptDecryptSignedMessage(t *testing.T) {
-	entity := testEntity(t)
-	plaintext := "Signed and encrypted message."
-
-	ciphertext, err := Encrypt(strings.NewReader(plaintext), EncryptParams{
-		Recipients: []*openpgp.Entity{entity},
-		Signer:     entity,
+	ciphertext, err := Encrypt(strings.NewReader(original), EncryptParams{
+		Recipients: []*openpgp.Entity{recipient},
+		Signer:     sender,
 		Armor:      true,
 	})
 	if err != nil {
 		t.Fatalf("encrypt+sign: %v", err)
 	}
 
-	result, err := Decrypt(bytes.NewReader(ciphertext), openpgp.EntityList{entity}, nil)
+	// Decrypt with recipient key; pass sender in keyring for signature verification.
+	kr := entityList(recipient, sender)
+	result, err := Decrypt(bytes.NewReader(ciphertext), kr, nil)
 	if err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}
-
-	if string(result.Plaintext) != plaintext {
-		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, plaintext)
+	if string(result.Plaintext) != original {
+		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, original)
+	}
+	if !result.Encrypted {
+		t.Error("expected Encrypted flag")
 	}
 	if !result.IsSigned {
-		t.Error("expected message to be signed")
+		t.Error("expected IsSigned flag")
 	}
 	if !result.SignatureOK {
-		t.Error("expected signature to be valid")
+		t.Error("expected SignatureOK flag")
 	}
 }
 
-func TestDecryptEmpty(t *testing.T) {
-	_, err := Decrypt(bytes.NewReader(nil), openpgp.EntityList{}, nil)
+func TestEncryptDecrypt_Symmetric_Armored(t *testing.T) {
+	passphrase := []byte("symmetric-secret")
+	original := "symmetric armored payload"
+
+	ciphertext, err := EncryptSymmetric(strings.NewReader(original), passphrase, true)
+	if err != nil {
+		t.Fatalf("symmetric encrypt: %v", err)
+	}
+
+	if !bytes.Contains(ciphertext, []byte("-----BEGIN PGP MESSAGE-----")) {
+		t.Fatal("expected armored output")
+	}
+
+	result, err := Decrypt(bytes.NewReader(ciphertext), nil, passphrase)
+	if err != nil {
+		t.Fatalf("symmetric decrypt: %v", err)
+	}
+	if string(result.Plaintext) != original {
+		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, original)
+	}
+}
+
+func TestEncryptDecrypt_Symmetric_Binary(t *testing.T) {
+	passphrase := []byte("symmetric-binary-secret")
+	original := "symmetric binary payload"
+
+	ciphertext, err := EncryptSymmetric(strings.NewReader(original), passphrase, false)
+	if err != nil {
+		t.Fatalf("symmetric encrypt: %v", err)
+	}
+
+	if bytes.Contains(ciphertext, []byte("-----BEGIN PGP")) {
+		t.Fatal("expected binary (non-armored) output")
+	}
+
+	result, err := Decrypt(bytes.NewReader(ciphertext), nil, passphrase)
+	if err != nil {
+		t.Fatalf("symmetric decrypt: %v", err)
+	}
+	if string(result.Plaintext) != original {
+		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, original)
+	}
+}
+
+func TestEncryptDecrypt_WithPassphraseProtectedKey(t *testing.T) {
+	passphrase := []byte("key-passphrase")
+	key, err := GenerateKey(KeyGenParams{
+		Name:       "PassKey",
+		Email:      "passkey@example.com",
+		Algorithm:  AlgoEd25519,
+		Passphrase: passphrase,
+	})
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	original := "encrypted with passphrase-protected key"
+
+	// Encryption uses the public key of the recipient, so it works regardless.
+	ciphertext, err := Encrypt(strings.NewReader(original), EncryptParams{
+		Recipients: []*openpgp.Entity{key},
+		Armor:      true,
+	})
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	// Decrypt requires the passphrase to unlock the private key.
+	result, err := Decrypt(bytes.NewReader(ciphertext), entityList(key), passphrase)
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if string(result.Plaintext) != original {
+		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, original)
+	}
+}
+
+func TestEncrypt_NoRecipients(t *testing.T) {
+	_, err := Encrypt(strings.NewReader("data"), EncryptParams{
+		Armor: true,
+	})
 	if err == nil {
-		t.Fatal("expected error for empty ciphertext")
+		t.Fatal("expected error with no recipients")
 	}
 }
 
-// --- Sign/Verify Round-Trip Tests ---
-
-func TestSignVerifyDetachedArmored(t *testing.T) {
-	entity := testEntity(t)
-	message := "Detached signature test."
-
-	sig, err := Sign(strings.NewReader(message), SignParams{
-		Signer:   entity,
-		Armor:    true,
-		Detached: true,
-	})
-	if err != nil {
-		t.Fatalf("sign detached: %v", err)
-	}
-
-	if !bytes.Contains(sig, []byte("-----BEGIN PGP SIGNATURE-----")) {
-		t.Error("expected armored signature")
-	}
-
-	result, err := VerifyDetached(
-		strings.NewReader(message),
-		bytes.NewReader(sig),
-		openpgp.EntityList{entity},
-	)
-	if err != nil {
-		t.Fatalf("verify detached: %v", err)
-	}
-
-	if !result.Valid {
-		t.Errorf("expected valid signature, got: %s", result.Message)
+func TestDecrypt_EmptyCiphertext(t *testing.T) {
+	_, err := Decrypt(bytes.NewReader(nil), entityList(), nil)
+	if err == nil {
+		t.Fatal("expected error on empty ciphertext")
 	}
 }
 
-func TestSignVerifyDetachedBinary(t *testing.T) {
-	entity := testEntity(t)
-	message := "Detached binary signature test."
+// ---------------------------------------------------------------------------
+// 3. Sign / Verify round-trip
+// ---------------------------------------------------------------------------
+
+func TestSignVerify_DetachedArmored(t *testing.T) {
+	key := genEd25519(t, "Signer", "signer@example.com")
+	message := "This message will be detach-signed (armored)."
 
 	sig, err := Sign(strings.NewReader(message), SignParams{
-		Signer:   entity,
-		Armor:    false,
-		Detached: true,
-	})
-	if err != nil {
-		t.Fatalf("sign detached binary: %v", err)
-	}
-
-	result, err := VerifyDetached(
-		strings.NewReader(message),
-		bytes.NewReader(sig),
-		openpgp.EntityList{entity},
-	)
-	if err != nil {
-		t.Fatalf("verify detached binary: %v", err)
-	}
-
-	if !result.Valid {
-		t.Errorf("expected valid signature, got: %s", result.Message)
-	}
-}
-
-func TestSignVerifyInlineArmored(t *testing.T) {
-	entity := testEntity(t)
-	message := "Inline signature test."
-
-	sig, err := Sign(strings.NewReader(message), SignParams{
-		Signer: entity,
-		Armor:  true,
-	})
-	if err != nil {
-		t.Fatalf("sign inline: %v", err)
-	}
-
-	if !bytes.Contains(sig, []byte("-----BEGIN PGP MESSAGE-----")) {
-		t.Error("expected armored message")
-	}
-
-	result, plaintext, err := VerifyInline(
-		bytes.NewReader(sig),
-		openpgp.EntityList{entity},
-	)
-	if err != nil {
-		t.Fatalf("verify inline: %v", err)
-	}
-
-	if !result.Valid {
-		t.Errorf("expected valid signature, got: %s", result.Message)
-	}
-	if string(plaintext) != message {
-		t.Errorf("plaintext mismatch: got %q, want %q", plaintext, message)
-	}
-}
-
-func TestSignVerifyClearsign(t *testing.T) {
-	entity := testEntity(t)
-	message := "Clearsign test message."
-
-	sig, err := Sign(strings.NewReader(message), SignParams{
-		Signer:    entity,
-		Cleartext: true,
-	})
-	if err != nil {
-		t.Fatalf("clearsign: %v", err)
-	}
-
-	if !bytes.Contains(sig, []byte("-----BEGIN PGP SIGNED MESSAGE-----")) {
-		t.Error("expected clearsign header")
-	}
-
-	// Verify through the VerifyInline auto-detect path
-	result, plaintext, err := VerifyInline(
-		bytes.NewReader(sig),
-		openpgp.EntityList{entity},
-	)
-	if err != nil {
-		t.Fatalf("verify clearsign: %v", err)
-	}
-
-	if !result.Valid {
-		t.Errorf("expected valid signature, got: %s", result.Message)
-	}
-	if !bytes.Contains(plaintext, []byte("Clearsign test message.")) {
-		t.Errorf("expected plaintext to contain original message, got %q", plaintext)
-	}
-
-	// Also verify directly through VerifyClearsign
-	result2, _, err := VerifyClearsign(sig, openpgp.EntityList{entity})
-	if err != nil {
-		t.Fatalf("verify clearsign direct: %v", err)
-	}
-	if !result2.Valid {
-		t.Errorf("expected valid clearsign signature, got: %s", result2.Message)
-	}
-}
-
-func TestSignVerifyDetachedTamperedMessage(t *testing.T) {
-	entity := testEntity(t)
-	message := "Original message."
-
-	sig, err := Sign(strings.NewReader(message), SignParams{
-		Signer:   entity,
+		Signer:   key,
 		Armor:    true,
 		Detached: true,
 	})
@@ -371,73 +372,390 @@ func TestSignVerifyDetachedTamperedMessage(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	// Verify with tampered message
-	result, err := VerifyDetached(
-		strings.NewReader("Tampered message!"),
+	if !bytes.Contains(sig, []byte("-----BEGIN PGP SIGNATURE-----")) {
+		t.Fatal("expected armored signature")
+	}
+
+	vr, err := VerifyDetached(
+		strings.NewReader(message),
 		bytes.NewReader(sig),
-		openpgp.EntityList{entity},
+		entityList(key),
 	)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
+	if !vr.Valid {
+		t.Errorf("expected valid signature, got: %s", vr.Message)
+	}
+}
 
-	if result.Valid {
+func TestSignVerify_DetachedBinary(t *testing.T) {
+	key := genEd25519(t, "BinSigner", "binsigner@example.com")
+	message := "This message will be detach-signed (binary)."
+
+	sig, err := Sign(strings.NewReader(message), SignParams{
+		Signer:   key,
+		Armor:    false,
+		Detached: true,
+	})
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	if bytes.Contains(sig, []byte("-----BEGIN PGP")) {
+		t.Fatal("expected binary (non-armored) signature")
+	}
+
+	vr, err := VerifyDetached(
+		strings.NewReader(message),
+		bytes.NewReader(sig),
+		entityList(key),
+	)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !vr.Valid {
+		t.Errorf("expected valid signature, got: %s", vr.Message)
+	}
+}
+
+func TestSignVerify_DetachedWrongKey(t *testing.T) {
+	signer := genEd25519(t, "RealSigner", "real@example.com")
+	wrongKey := genEd25519(t, "WrongKey", "wrong@example.com")
+	message := "signed by someone else"
+
+	sig, err := Sign(strings.NewReader(message), SignParams{
+		Signer:   signer,
+		Armor:    true,
+		Detached: true,
+	})
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	vr, err := VerifyDetached(
+		strings.NewReader(message),
+		bytes.NewReader(sig),
+		entityList(wrongKey),
+	)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if vr.Valid {
+		t.Error("expected invalid signature when verifying with wrong key")
+	}
+}
+
+func TestSignVerify_DetachedTamperedMessage(t *testing.T) {
+	key := genEd25519(t, "TamperSigner", "tamper@example.com")
+	message := "original message"
+
+	sig, err := Sign(strings.NewReader(message), SignParams{
+		Signer:   key,
+		Armor:    true,
+		Detached: true,
+	})
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	tampered := "tampered message"
+	vr, err := VerifyDetached(
+		strings.NewReader(tampered),
+		bytes.NewReader(sig),
+		entityList(key),
+	)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if vr.Valid {
 		t.Error("expected invalid signature for tampered message")
 	}
 }
 
-func TestSignRequiresSigner(t *testing.T) {
-	_, err := Sign(strings.NewReader("test"), SignParams{})
-	if err == nil {
-		t.Fatal("expected error for nil signer")
+func TestSignVerify_InlineArmored(t *testing.T) {
+	key := genEd25519(t, "InlineSigner", "inline@example.com")
+	message := "This message will be inline-signed."
+
+	signedMsg, err := Sign(strings.NewReader(message), SignParams{
+		Signer: key,
+		Armor:  true,
+	})
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	if !bytes.Contains(signedMsg, []byte("-----BEGIN PGP MESSAGE-----")) {
+		t.Fatal("expected armored PGP message")
+	}
+
+	vr, plaintext, err := VerifyInline(bytes.NewReader(signedMsg), entityList(key))
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !vr.Valid {
+		t.Errorf("expected valid signature, got: %s", vr.Message)
+	}
+	if string(plaintext) != message {
+		t.Errorf("plaintext mismatch: got %q, want %q", plaintext, message)
 	}
 }
 
-// --- isArmored Tests ---
+func TestSignVerify_Clearsign(t *testing.T) {
+	key := genEd25519(t, "ClearSigner", "clear@example.com")
+	message := "This message will be clearsigned."
+
+	signedMsg, err := Sign(strings.NewReader(message), SignParams{
+		Signer:    key,
+		Cleartext: true,
+	})
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	if !bytes.Contains(signedMsg, []byte("-----BEGIN PGP SIGNED MESSAGE-----")) {
+		t.Fatal("expected clearsign header")
+	}
+
+	// Verify via VerifyClearsign directly.
+	vr, plaintext, err := VerifyClearsign(signedMsg, entityList(key))
+	if err != nil {
+		t.Fatalf("verify clearsign: %v", err)
+	}
+	if !vr.Valid {
+		t.Errorf("expected valid signature, got: %s", vr.Message)
+	}
+	if !bytes.Contains(plaintext, []byte(message)) {
+		t.Errorf("plaintext does not contain original message: got %q", plaintext)
+	}
+}
+
+func TestSignVerify_ClearsignViaVerifyInline(t *testing.T) {
+	key := genEd25519(t, "ClearInline", "clearinline@example.com")
+	message := "Clearsign routed through VerifyInline."
+
+	signedMsg, err := Sign(strings.NewReader(message), SignParams{
+		Signer:    key,
+		Cleartext: true,
+	})
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	// VerifyInline should auto-detect clearsigned messages and delegate.
+	vr, plaintext, err := VerifyInline(bytes.NewReader(signedMsg), entityList(key))
+	if err != nil {
+		t.Fatalf("verify inline (clearsign): %v", err)
+	}
+	if !vr.Valid {
+		t.Errorf("expected valid signature, got: %s", vr.Message)
+	}
+	if !bytes.Contains(plaintext, []byte(message)) {
+		t.Errorf("plaintext does not contain original message: got %q", plaintext)
+	}
+}
+
+func TestSign_NilSigner(t *testing.T) {
+	_, err := Sign(strings.NewReader("data"), SignParams{})
+	if err == nil {
+		t.Fatal("expected error with nil signer")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 4. Expired key rejection
+// ---------------------------------------------------------------------------
+
+func TestExpiredKeyRejection_Encrypt(t *testing.T) {
+	// Generate a key with a 1-second lifetime.
+	key, err := GenerateKey(KeyGenParams{
+		Name:      "ShortLived",
+		Email:     "short@example.com",
+		Algorithm: AlgoEd25519,
+		Lifetime:  1 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	// Wait for the key to expire.
+	time.Sleep(2 * time.Second)
+
+	_, err = Encrypt(strings.NewReader("test"), EncryptParams{
+		Recipients: []*openpgp.Entity{key},
+		Armor:      true,
+	})
+	if err == nil {
+		t.Fatal("expected error encrypting to expired key")
+	}
+	if !strings.Contains(err.Error(), "expired") {
+		t.Errorf("expected 'expired' in error, got: %v", err)
+	}
+}
+
+func TestExpiredKeyRejection_Sign(t *testing.T) {
+	key, err := GenerateKey(KeyGenParams{
+		Name:      "ShortSignKey",
+		Email:     "shortsign@example.com",
+		Algorithm: AlgoEd25519,
+		Lifetime:  1 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	time.Sleep(2 * time.Second)
+
+	_, err = Sign(strings.NewReader("test"), SignParams{
+		Signer:   key,
+		Detached: true,
+		Armor:    true,
+	})
+	if err == nil {
+		t.Fatal("expected error signing with expired key")
+	}
+	if !strings.Contains(err.Error(), "expired") {
+		t.Errorf("expected 'expired' in error, got: %v", err)
+	}
+}
+
+func TestExpiredKeyRejection_EncryptWithExpiredSigner(t *testing.T) {
+	recipient := genEd25519(t, "ValidRecip", "validrecip@example.com")
+	signer, err := GenerateKey(KeyGenParams{
+		Name:      "ExpiredSigner",
+		Email:     "expiredsigner@example.com",
+		Algorithm: AlgoEd25519,
+		Lifetime:  1 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	time.Sleep(2 * time.Second)
+
+	_, err = Encrypt(strings.NewReader("test"), EncryptParams{
+		Recipients: []*openpgp.Entity{recipient},
+		Signer:     signer,
+		Armor:      true,
+	})
+	if err == nil {
+		t.Fatal("expected error encrypting with expired signer key")
+	}
+	if !strings.Contains(err.Error(), "expired") {
+		t.Errorf("expected 'expired' in error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 5. isArmored detection
+// ---------------------------------------------------------------------------
 
 func TestIsArmored(t *testing.T) {
 	tests := []struct {
-		name   string
-		input  string
-		expect bool
+		name string
+		data []byte
+		want bool
 	}{
-		{"standard armor", "-----BEGIN PGP MESSAGE-----\ndata", true},
-		{"with leading whitespace", "   \n  -----BEGIN PGP MESSAGE-----\ndata", true},
-		{"public key block", "-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata", true},
-		{"binary data", "\x99\x01\x0d\x04\x5f\x5f\x5f", false},
-		{"empty", "", false},
-		{"random text", "Hello world this is not armored", false},
-		{"almost armor", "-----BEGIN PGP", true},
+		{
+			name: "armored PGP message",
+			data: []byte("-----BEGIN PGP MESSAGE-----\nsomething\n-----END PGP MESSAGE-----"),
+			want: true,
+		},
+		{
+			name: "armored PGP signature",
+			data: []byte("-----BEGIN PGP SIGNATURE-----\nsomething"),
+			want: true,
+		},
+		{
+			name: "armored PGP public key",
+			data: []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nsomething"),
+			want: true,
+		},
+		{
+			name: "leading spaces",
+			data: []byte("   -----BEGIN PGP MESSAGE-----\nsomething"),
+			want: true,
+		},
+		{
+			name: "leading tabs",
+			data: []byte("\t\t-----BEGIN PGP MESSAGE-----\nsomething"),
+			want: true,
+		},
+		{
+			name: "leading newlines",
+			data: []byte("\n\n\n-----BEGIN PGP MESSAGE-----\nsomething"),
+			want: true,
+		},
+		{
+			name: "leading mixed whitespace",
+			data: []byte("  \t\r\n  -----BEGIN PGP MESSAGE-----\nsomething"),
+			want: true,
+		},
+		{
+			name: "large leading whitespace within 1024 byte window",
+			data: append([]byte(strings.Repeat(" ", 500)), []byte("-----BEGIN PGP MESSAGE-----\n")...),
+			want: true,
+		},
+		{
+			name: "binary data",
+			data: []byte{0x99, 0x01, 0x0d, 0x04, 0x5f},
+			want: false,
+		},
+		{
+			name: "plain text",
+			data: []byte("Hello, World!"),
+			want: false,
+		},
+		{
+			name: "almost armored - wrong prefix",
+			data: []byte("-----BEGIN SOMETHING-----"),
+			want: false,
+		},
+		{
+			name: "empty input",
+			data: []byte{},
+			want: false,
+		},
+		{
+			name: "only whitespace",
+			data: []byte("   \t\r\n   "),
+			want: false,
+		},
+		{
+			name: "prefix only (no full header)",
+			data: []byte("-----BEGIN PGP"),
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isArmored([]byte(tt.input))
-			if got != tt.expect {
-				t.Errorf("isArmored(%q) = %v, want %v", tt.input[:min(len(tt.input), 40)], got, tt.expect)
+			got := isArmored(tt.data)
+			if got != tt.want {
+				truncated := string(tt.data)
+				if len(truncated) > 40 {
+					truncated = truncated[:40] + "..."
+				}
+				t.Errorf("isArmored(%q) = %v, want %v", truncated, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestIsArmoredLargeLeadingWhitespace(t *testing.T) {
-	// L-05: Ensure we check up to 1024 bytes
-	ws := strings.Repeat(" ", 500)
-	data := ws + "-----BEGIN PGP MESSAGE-----\n"
-	if !isArmored([]byte(data)) {
-		t.Error("expected armor detection with 500 bytes of leading whitespace")
+// ---------------------------------------------------------------------------
+// 6. Decompression bomb protection: MaxMessageSize constant
+// ---------------------------------------------------------------------------
+
+func TestMaxMessageSize(t *testing.T) {
+	expected := 256 << 20 // 256 MiB
+	if MaxMessageSize != expected {
+		t.Errorf("MaxMessageSize = %d, want %d", MaxMessageSize, expected)
 	}
 }
 
-// --- MaxMessageSize Tests ---
-
-func TestMaxMessageSizeConstant(t *testing.T) {
-	if MaxMessageSize != 256<<20 {
-		t.Errorf("MaxMessageSize = %d, want %d", MaxMessageSize, 256<<20)
-	}
-}
-
-// --- isClearsigned Tests ---
+// ---------------------------------------------------------------------------
+// isClearsigned detection
+// ---------------------------------------------------------------------------
 
 func TestIsClearsigned(t *testing.T) {
 	tests := []struct {
@@ -446,7 +764,7 @@ func TestIsClearsigned(t *testing.T) {
 		expect bool
 	}{
 		{"clearsign header", "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA256", true},
-		{"with whitespace", "  \n-----BEGIN PGP SIGNED MESSAGE-----\n", true},
+		{"with leading whitespace", "  \n-----BEGIN PGP SIGNED MESSAGE-----\n", true},
 		{"regular message", "-----BEGIN PGP MESSAGE-----\n", false},
 		{"empty", "", false},
 	}
@@ -455,8 +773,65 @@ func TestIsClearsigned(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := isClearsigned([]byte(tt.input))
 			if got != tt.expect {
-				t.Errorf("isClearsigned(%q) = %v, want %v", tt.input[:min(len(tt.input), 40)], got, tt.expect)
+				t.Errorf("isClearsigned(%q) = %v, want %v", tt.input, got, tt.expect)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Additional round-trip tests with RSA-4096
+// ---------------------------------------------------------------------------
+
+func TestEncryptDecrypt_RSA4096(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping RSA-4096 round-trip in short mode")
+	}
+	key := genRSA4096(t, "RSAUser", "rsa@example.com")
+	original := "RSA-4096 round-trip test"
+
+	ciphertext, err := Encrypt(strings.NewReader(original), EncryptParams{
+		Recipients: []*openpgp.Entity{key},
+		Armor:      true,
+	})
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	result, err := Decrypt(bytes.NewReader(ciphertext), entityList(key), nil)
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if string(result.Plaintext) != original {
+		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, original)
+	}
+}
+
+func TestSignVerify_RSA4096_Detached(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping RSA-4096 sign/verify in short mode")
+	}
+	key := genRSA4096(t, "RSASigner", "rsasign@example.com")
+	message := "RSA-4096 detached signature test"
+
+	sig, err := Sign(strings.NewReader(message), SignParams{
+		Signer:   key,
+		Armor:    true,
+		Detached: true,
+	})
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	vr, err := VerifyDetached(
+		strings.NewReader(message),
+		bytes.NewReader(sig),
+		entityList(key),
+	)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !vr.Valid {
+		t.Errorf("expected valid signature, got: %s", vr.Message)
 	}
 }

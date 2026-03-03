@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"os"
 
 	"github.com/hamalizer/gpg_go/internal/keyring"
 	"github.com/spf13/cobra"
@@ -49,6 +50,31 @@ func newExportCmd() *cobra.Command {
 			identifier := args[0]
 
 			if exportSecret {
+				// Require passphrase confirmation before exporting secret key material
+				entity := kr.FindSecretKey(identifier)
+				if entity == nil {
+					return fmt.Errorf("secret key not found: %s", identifier)
+				}
+				if keyring.IsEntityKeyEncrypted(entity) {
+					fmt.Fprint(os.Stderr, "Passphrase (confirm identity): ")
+					passphrase, pErr := readPassphrase()
+					if pErr != nil {
+						return fmt.Errorf("read passphrase: %w", pErr)
+					}
+					fmt.Fprintln(os.Stderr)
+					defer zeroBytes(passphrase)
+
+					// Verify the passphrase is correct by trying to decrypt,
+					// but we don't actually need the decrypted key — just proof of knowledge.
+					if err := keyring.DecryptEntityKeys(entity, passphrase); err != nil {
+						return fmt.Errorf("wrong passphrase")
+					}
+					// Re-encrypt so the exported key is still protected
+					if err := keyring.EncryptEntityKeys(entity, passphrase); err != nil {
+						return fmt.Errorf("re-encrypt key: %w", err)
+					}
+				}
+
 				data, err := kr.ExportSecretKey(identifier, true)
 				if err != nil {
 					return err

@@ -70,9 +70,12 @@ func Decrypt(ciphertext io.Reader, keyring openpgp.KeyRing, passphrase []byte) (
 		return nil, fmt.Errorf("decrypt: %w", err)
 	}
 
-	plaintext, err := io.ReadAll(md.UnverifiedBody)
+	plaintext, err := io.ReadAll(io.LimitReader(md.UnverifiedBody, MaxMessageSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read plaintext: %w", err)
+	}
+	if len(plaintext) > MaxMessageSize {
+		return nil, fmt.Errorf("decrypted message exceeds maximum size (%d bytes)", MaxMessageSize)
 	}
 
 	result := &DecryptResult{

@@ -85,7 +85,7 @@ func Encrypt(plaintext io.Reader, params EncryptParams) ([]byte, error) {
 // contains an expiration time that has passed.
 func isEntityExpired(entity *openpgp.Entity) bool {
 	for _, id := range entity.Identities {
-		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil {
+		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil && *id.SelfSignature.KeyLifetimeSecs > 0 {
 			expiry := entity.PrimaryKey.CreationTime.Add(
 				time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second,
 			)

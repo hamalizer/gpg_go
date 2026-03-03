@@ -71,11 +71,20 @@ func (kr *Keyring) AllKeys() openpgp.EntityList {
 	return all
 }
 
-func (kr *Keyring) ImportKey(armoredKey io.Reader) ([]*openpgp.Entity, error) {
-	entities, err := openpgp.ReadArmoredKeyRing(armoredKey)
+func (kr *Keyring) ImportKey(keyData io.Reader) ([]*openpgp.Entity, error) {
+	// Buffer the input so we can retry with binary format if armored fails
+	data, err := io.ReadAll(keyData)
+	if err != nil {
+		return nil, fmt.Errorf("read key data: %w", err)
+	}
+
+	entities, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(data))
 	if err != nil {
 		// Try binary format as fallback
-		return nil, fmt.Errorf("read key: %w", err)
+		entities, err = openpgp.ReadKeyRing(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("read key (tried armored and binary): %w", err)
+		}
 	}
 
 	kr.mu.Lock()
@@ -426,7 +435,7 @@ func IsEntityKeyEncrypted(entity *openpgp.Entity) bool {
 // (including when no expiration is set).
 func IsKeyExpired(entity *openpgp.Entity) bool {
 	for _, id := range entity.Identities {
-		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil {
+		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil && *id.SelfSignature.KeyLifetimeSecs > 0 {
 			expiry := entity.PrimaryKey.CreationTime.Add(
 				time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second,
 			)
@@ -436,13 +445,13 @@ func IsKeyExpired(entity *openpgp.Entity) bool {
 			return false // found a valid self-sig with expiry, not expired
 		}
 	}
-	return false // no expiration set
+	return false // no expiration set (or lifetime is 0, meaning no expiry)
 }
 
 // KeyExpiry returns the expiration time of a key, or zero time if none is set.
 func KeyExpiry(entity *openpgp.Entity) time.Time {
 	for _, id := range entity.Identities {
-		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil {
+		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil && *id.SelfSignature.KeyLifetimeSecs > 0 {
 			return entity.PrimaryKey.CreationTime.Add(
 				time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second,
 			)

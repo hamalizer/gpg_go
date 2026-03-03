@@ -46,6 +46,14 @@ For inline signatures:   gpg-go verify signed-message.gpg`,
 					return err
 				}
 
+				if jsonOutput {
+					vj := VerifyJSON{Valid: result.Valid, Message: result.Message}
+					if result.SignedBy != nil {
+						vj.KeyID = result.SignedBy.PublicKey.KeyIdString()
+					}
+					return printJSON(vj)
+				}
+
 				fmt.Fprintln(os.Stderr, result.Message)
 				if !result.Valid {
 					return errBadSignature
@@ -65,6 +73,14 @@ For inline signatures:   gpg-go verify signed-message.gpg`,
 			)
 			if err != nil {
 				return err
+			}
+
+			if jsonOutput {
+				vj := VerifyJSON{Valid: result.Valid, Message: result.Message}
+				if result.SignedBy != nil {
+					vj.KeyID = result.SignedBy.PublicKey.KeyIdString()
+				}
+				return printJSON(vj)
 			}
 
 			fmt.Fprintln(os.Stderr, result.Message)

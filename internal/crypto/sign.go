@@ -133,7 +133,7 @@ func inlineSign(data io.Reader, params SignParams, cfg *packet.Config) ([]byte, 
 
 func isSignerExpired(entity *openpgp.Entity) bool {
 	for _, id := range entity.Identities {
-		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil {
+		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil && *id.SelfSignature.KeyLifetimeSecs > 0 {
 			expiry := entity.PrimaryKey.CreationTime.Add(
 				time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second,
 			)

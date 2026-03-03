@@ -15,6 +15,7 @@ var (
 	armorFlag  bool
 	outputFile string
 	verbose    bool
+	jsonOutput bool
 
 	appConfig *config.Config
 	kr        *keyring.Keyring
@@ -54,6 +55,7 @@ SHA-256 hashing, HKP keyserver protocol, and ASCII armor.`,
 	root.PersistentFlags().BoolVarP(&armorFlag, "armor", "a", false, "create ASCII armored output")
 	root.PersistentFlags().StringVarP(&outputFile, "output", "o", "", "write output to file")
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
+	root.PersistentFlags().BoolVar(&jsonOutput, "json", false, "produce JSON output for machine consumption")
 
 	root.AddCommand(
 		newGenerateCmd(),
@@ -72,6 +74,9 @@ SHA-256 hashing, HKP keyserver protocol, and ASCII armor.`,
 		newSendKeysCmd(),
 		newEditTrustCmd(),
 		newListTrustCmd(),
+		newGitCmd(),
+		newAuditCmd(),
+		newAgentCmd(),
 	)
 
 	return root

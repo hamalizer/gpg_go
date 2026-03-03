@@ -16,28 +16,35 @@ func newListKeysCmd() *cobra.Command {
 		Short:   "List public keys in keyring",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			keys := kr.PublicKeys()
-			if len(keys) == 0 {
-				fmt.Println("No public keys found.")
-				return nil
-			}
 
 			search := ""
 			if len(args) > 0 {
 				search = args[0]
 			}
 
-			// Count matching keys for accurate header
-			var matching []string
+			var matched []*openpgp.Entity
 			for _, entity := range keys {
-				info := keyring.KeyInfo(entity)
-				if search == "" || strings.Contains(strings.ToLower(info), strings.ToLower(search)) {
-					matching = append(matching, info)
+				if search == "" || strings.Contains(strings.ToLower(keyring.KeyInfo(entity)), strings.ToLower(search)) {
+					matched = append(matched, entity)
 				}
 			}
 
-			fmt.Printf("Public keyring: %d key(s)\n\n", len(matching))
-			for _, info := range matching {
-				fmt.Println(info)
+			if jsonOutput {
+				jkeys := make([]KeyJSON, 0, len(matched))
+				for _, e := range matched {
+					jkeys = append(jkeys, entityToJSON(e))
+				}
+				return printJSON(jkeys)
+			}
+
+			if len(matched) == 0 {
+				fmt.Println("No public keys found.")
+				return nil
+			}
+
+			fmt.Printf("Public keyring: %d key(s)\n\n", len(matched))
+			for _, entity := range matched {
+				fmt.Println(keyring.KeyInfo(entity))
 				fmt.Println()
 			}
 			return nil
@@ -52,27 +59,35 @@ func newListSecretKeysCmd() *cobra.Command {
 		Short:   "List secret keys in keyring",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			keys := kr.SecretKeys()
-			if len(keys) == 0 {
-				fmt.Println("No secret keys found.")
-				return nil
-			}
 
 			search := ""
 			if len(args) > 0 {
 				search = args[0]
 			}
 
-			var matching []string
+			var matched []*openpgp.Entity
 			for _, entity := range keys {
-				info := keyring.KeyInfo(entity)
-				if search == "" || strings.Contains(strings.ToLower(info), strings.ToLower(search)) {
-					matching = append(matching, info)
+				if search == "" || strings.Contains(strings.ToLower(keyring.KeyInfo(entity)), strings.ToLower(search)) {
+					matched = append(matched, entity)
 				}
 			}
 
-			fmt.Printf("Secret keyring: %d key(s)\n\n", len(matching))
-			for _, info := range matching {
-				fmt.Println(info)
+			if jsonOutput {
+				jkeys := make([]KeyJSON, 0, len(matched))
+				for _, e := range matched {
+					jkeys = append(jkeys, entityToJSON(e))
+				}
+				return printJSON(jkeys)
+			}
+
+			if len(matched) == 0 {
+				fmt.Println("No secret keys found.")
+				return nil
+			}
+
+			fmt.Printf("Secret keyring: %d key(s)\n\n", len(matched))
+			for _, entity := range matched {
+				fmt.Println(keyring.KeyInfo(entity))
 				fmt.Println()
 			}
 			return nil
@@ -86,27 +101,46 @@ func newFingerprintCmd() *cobra.Command {
 		Short: "Show key fingerprints",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			keys := kr.PublicKeys()
-			if len(keys) == 0 {
-				fmt.Println("No keys found.")
-				return nil
-			}
 
 			search := ""
 			if len(args) > 0 {
 				search = args[0]
 			}
 
+			var targets []*openpgp.Entity
 			if search != "" {
-				// Find the specific key once, not per iteration (O(n) not O(n^2))
 				found := kr.FindPublicKey(search)
 				if found == nil {
 					return fmt.Errorf("key not found: %s", search)
 				}
-				printFingerprint(found)
+				targets = []*openpgp.Entity{found}
+			} else {
+				targets = keys
+			}
+
+			if jsonOutput {
+				type fpJSON struct {
+					KeyID       string   `json:"key_id"`
+					Fingerprint string   `json:"fingerprint"`
+					UIDs        []string `json:"uids"`
+				}
+				out := make([]fpJSON, 0, len(targets))
+				for _, e := range targets {
+					out = append(out, fpJSON{
+						KeyID:       e.PrimaryKey.KeyIdString(),
+						Fingerprint: fmt.Sprintf("%X", e.PrimaryKey.Fingerprint),
+						UIDs:        keyring.SortedUIDs(e),
+					})
+				}
+				return printJSON(out)
+			}
+
+			if len(targets) == 0 {
+				fmt.Println("No keys found.")
 				return nil
 			}
 
-			for _, entity := range keys {
+			for _, entity := range targets {
 				printFingerprint(entity)
 			}
 			return nil

@@ -149,6 +149,23 @@ func (kr *Keyring) AddEntity(entity *openpgp.Entity) error {
 	return nil
 }
 
+// UpdateEntity re-saves an existing entity to disk. Use this after modifying
+// a key (e.g. adding subkeys or UIDs) so the changes are persisted.
+func (kr *Keyring) UpdateEntity(entity *openpgp.Entity) error {
+	kr.mu.Lock()
+	defer kr.mu.Unlock()
+
+	if entity.PrivateKey != nil {
+		if err := kr.store.SavePrivateKey(entity); err != nil {
+			return err
+		}
+	}
+	if err := kr.store.SavePublicKey(entity); err != nil {
+		return err
+	}
+	return nil
+}
+
 // hasKeyLocked checks if a key with the given fingerprint exists in the list.
 // Caller must hold kr.mu.
 func (kr *Keyring) hasKeyLocked(keys openpgp.EntityList, fingerprint string) bool {
@@ -320,8 +337,51 @@ func KeyInfo(entity *openpgp.Entity) string {
 	for _, uid := range uids {
 		info += fmt.Sprintf("  uid: %s\n", uid)
 	}
-	info += fmt.Sprintf("  fingerprint: %s", fingerprint)
-	return info
+	info += fmt.Sprintf("  fingerprint: %s\n", fingerprint)
+	for _, sub := range entity.Subkeys {
+		subAlgo := "unknown"
+		subBits := ""
+		if bl, err := sub.PublicKey.BitLength(); err == nil && bl > 0 {
+			subBits = fmt.Sprintf("%d", bl)
+		}
+		switch sub.PublicKey.PubKeyAlgo {
+		case 1, 2, 3:
+			subAlgo = "RSA"
+		case 18:
+			subAlgo = "ECDH"
+		case 22:
+			subAlgo = "EdDSA"
+			if subBits == "" {
+				subBits = "256"
+			}
+		case 25:
+			subAlgo = "X25519"
+			if subBits == "" {
+				subBits = "256"
+			}
+		}
+		usage := ""
+		if sub.Sig != nil {
+			if sub.Sig.FlagEncryptStorage || sub.Sig.FlagEncryptCommunications {
+				usage = " [encrypt]"
+			}
+			if sub.Sig.FlagSign {
+				usage = " [sign]"
+			}
+		}
+		subCreated := sub.PublicKey.CreationTime.Format("2006-01-02")
+		subExpiry := ""
+		if sub.Sig != nil && sub.Sig.KeyLifetimeSecs != nil && *sub.Sig.KeyLifetimeSecs > 0 {
+			exp := sub.PublicKey.CreationTime.Add(time.Duration(*sub.Sig.KeyLifetimeSecs) * time.Second)
+			subExpiry = fmt.Sprintf(" [expires %s]", exp.Format("2006-01-02"))
+		}
+		revoked := ""
+		if len(sub.Revocations) > 0 {
+			revoked = " [REVOKED]"
+		}
+		info += fmt.Sprintf("  sub: %s%s/%s %s%s%s%s\n", subAlgo, subBits, sub.PublicKey.KeyIdString(), subCreated, usage, subExpiry, revoked)
+	}
+	return strings.TrimRight(info, "\n")
 }
 
 // SortedUIDs returns identity names in deterministic order.

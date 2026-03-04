@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -833,5 +834,284 @@ func TestSignVerify_RSA4096_Detached(t *testing.T) {
 	}
 	if !vr.Valid {
 		t.Errorf("expected valid signature, got: %s", vr.Message)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 8. Subkey management (R2-I-01)
+// ---------------------------------------------------------------------------
+
+func TestAddSubkey_Encryption(t *testing.T) {
+	key := genEd25519(t, "SubkeyTest", "subkey@example.com")
+	initialCount := len(key.Subkeys)
+
+	if err := AddSubkey(key, SubkeyEncryption, 0, nil); err != nil {
+		t.Fatalf("AddSubkey encryption: %v", err)
+	}
+	if len(key.Subkeys) != initialCount+1 {
+		t.Fatalf("expected %d subkeys, got %d", initialCount+1, len(key.Subkeys))
+	}
+
+	newSub := key.Subkeys[len(key.Subkeys)-1]
+	if newSub.Sig == nil {
+		t.Fatal("new subkey has no binding signature")
+	}
+	if !newSub.Sig.FlagEncryptStorage && !newSub.Sig.FlagEncryptCommunications {
+		t.Error("new subkey should have encryption flags")
+	}
+}
+
+func TestAddSubkey_Signing(t *testing.T) {
+	key := genEd25519(t, "SignSubkey", "signsub@example.com")
+	initialCount := len(key.Subkeys)
+
+	if err := AddSubkey(key, SubkeySigning, 0, nil); err != nil {
+		t.Fatalf("AddSubkey signing: %v", err)
+	}
+	if len(key.Subkeys) != initialCount+1 {
+		t.Fatalf("expected %d subkeys, got %d", initialCount+1, len(key.Subkeys))
+	}
+
+	newSub := key.Subkeys[len(key.Subkeys)-1]
+	if !newSub.Sig.FlagSign {
+		t.Error("new subkey should have signing flag")
+	}
+}
+
+func TestAddSubkey_WithExpiry(t *testing.T) {
+	key := genEd25519(t, "ExpirySubkey", "expirysub@example.com")
+
+	lifetime := 365 * 24 * time.Hour
+	if err := AddSubkey(key, SubkeyEncryption, lifetime, nil); err != nil {
+		t.Fatalf("AddSubkey with expiry: %v", err)
+	}
+
+	newSub := key.Subkeys[len(key.Subkeys)-1]
+	if newSub.Sig.KeyLifetimeSecs == nil || *newSub.Sig.KeyLifetimeSecs == 0 {
+		t.Error("expected subkey to have expiration set")
+	}
+}
+
+func TestAddSubkey_WithPassphrase(t *testing.T) {
+	pass := []byte("test-passphrase")
+	key, err := GenerateKey(KeyGenParams{
+		Name:       "PassSubkey",
+		Email:      "passsub@example.com",
+		Algorithm:  AlgoEd25519,
+		Passphrase: pass,
+	})
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	// Decrypt before adding subkey
+	if err := key.PrivateKey.Decrypt(pass); err != nil {
+		t.Fatalf("decrypt primary key: %v", err)
+	}
+	for i, sub := range key.Subkeys {
+		if sub.PrivateKey != nil && sub.PrivateKey.Encrypted {
+			if err := key.Subkeys[i].PrivateKey.Decrypt(pass); err != nil {
+				t.Fatalf("decrypt subkey: %v", err)
+			}
+		}
+	}
+
+	if err := AddSubkey(key, SubkeyEncryption, 0, pass); err != nil {
+		t.Fatalf("AddSubkey with passphrase: %v", err)
+	}
+
+	newSub := key.Subkeys[len(key.Subkeys)-1]
+	if newSub.PrivateKey != nil && !newSub.PrivateKey.Encrypted {
+		t.Error("new subkey should be encrypted with passphrase")
+	}
+}
+
+func TestAddSubkey_EncryptedPrimaryFails(t *testing.T) {
+	pass := []byte("locked-key")
+	key, err := GenerateKey(KeyGenParams{
+		Name:       "LockedKey",
+		Email:      "locked@example.com",
+		Algorithm:  AlgoEd25519,
+		Passphrase: pass,
+	})
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	// Try to add subkey without decrypting — should fail
+	err = AddSubkey(key, SubkeyEncryption, 0, nil)
+	if err == nil {
+		t.Fatal("expected error adding subkey to encrypted key")
+	}
+}
+
+func TestAddSubkey_EncryptDecryptRoundTrip(t *testing.T) {
+	// Generate key, add a second encryption subkey, then encrypt/decrypt
+	sender := genEd25519(t, "Sender", "sender@example.com")
+	recipient := genEd25519(t, "Recipient", "recipient@example.com")
+
+	if err := AddSubkey(recipient, SubkeyEncryption, 0, nil); err != nil {
+		t.Fatalf("add subkey: %v", err)
+	}
+	if len(recipient.Subkeys) < 2 {
+		t.Fatalf("expected at least 2 subkeys, got %d", len(recipient.Subkeys))
+	}
+
+	original := "message encrypted to key with rotated subkey"
+	ciphertext, err := Encrypt(strings.NewReader(original), EncryptParams{
+		Recipients: []*openpgp.Entity{recipient},
+		Signer:     sender,
+		Armor:      true,
+	})
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	result, err := Decrypt(bytes.NewReader(ciphertext), entityList(recipient), nil)
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if string(result.Plaintext) != original {
+		t.Errorf("plaintext mismatch: got %q, want %q", result.Plaintext, original)
+	}
+}
+
+func TestAddSubkey_NilPrivateKey(t *testing.T) {
+	key := genEd25519(t, "NoPriv", "nopriv@example.com")
+	// Remove private key to simulate public-only entity
+	key.PrivateKey = nil
+	err := AddSubkey(key, SubkeyEncryption, 0, nil)
+	if err == nil {
+		t.Fatal("expected error with nil private key")
+	}
+}
+
+func TestSubkeyType_String(t *testing.T) {
+	if SubkeyEncryption.String() != "encryption" {
+		t.Errorf("SubkeyEncryption.String() = %q", SubkeyEncryption.String())
+	}
+	if SubkeySigning.String() != "signing" {
+		t.Errorf("SubkeySigning.String() = %q", SubkeySigning.String())
+	}
+	if SubkeyType(99).String() != "unknown" {
+		t.Errorf("SubkeyType(99).String() = %q", SubkeyType(99).String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 9. Multiple UIDs (R2-I-03)
+// ---------------------------------------------------------------------------
+
+func TestAddUID(t *testing.T) {
+	key := genEd25519(t, "Primary", "primary@example.com")
+	initialUIDs := len(key.Identities)
+
+	if err := AddUID(key, "Secondary", "", "secondary@example.com"); err != nil {
+		t.Fatalf("AddUID: %v", err)
+	}
+
+	if len(key.Identities) != initialUIDs+1 {
+		t.Fatalf("expected %d UIDs, got %d", initialUIDs+1, len(key.Identities))
+	}
+
+	// Verify both UIDs exist
+	found := false
+	for _, id := range key.Identities {
+		if strings.Contains(id.Name, "secondary@example.com") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("new UID not found in identities")
+	}
+}
+
+func TestAddUID_WithComment(t *testing.T) {
+	key := genEd25519(t, "CommentTest", "comment@example.com")
+
+	if err := AddUID(key, "Work Email", "office", "work@example.com"); err != nil {
+		t.Fatalf("AddUID with comment: %v", err)
+	}
+
+	found := false
+	for _, id := range key.Identities {
+		if strings.Contains(id.Name, "work@example.com") && strings.Contains(id.Name, "office") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("new UID with comment not found")
+	}
+}
+
+func TestAddUID_DuplicateFails(t *testing.T) {
+	key := genEd25519(t, "DupTest", "dup@example.com")
+
+	err := AddUID(key, "DupTest", "", "dup@example.com")
+	if err == nil {
+		t.Fatal("expected error adding duplicate UID")
+	}
+}
+
+func TestAddUID_EncryptedPrimaryFails(t *testing.T) {
+	pass := []byte("uid-locked")
+	key, err := GenerateKey(KeyGenParams{
+		Name:       "UIDLocked",
+		Email:      "uidlocked@example.com",
+		Algorithm:  AlgoEd25519,
+		Passphrase: pass,
+	})
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	err = AddUID(key, "Extra", "", "extra@example.com")
+	if err == nil {
+		t.Fatal("expected error adding UID to encrypted key")
+	}
+}
+
+func TestAddUID_MultipleUIDs(t *testing.T) {
+	key := genEd25519(t, "Multi", "multi@example.com")
+
+	for i := range 3 {
+		email := fmt.Sprintf("extra%d@example.com", i)
+		if err := AddUID(key, fmt.Sprintf("Extra %d", i), "", email); err != nil {
+			t.Fatalf("AddUID %d: %v", i, err)
+		}
+	}
+
+	if len(key.Identities) != 4 {
+		t.Errorf("expected 4 UIDs, got %d", len(key.Identities))
+	}
+}
+
+func TestAddUID_NilPrivateKey(t *testing.T) {
+	key := genEd25519(t, "PubOnly", "pubonly@example.com")
+	key.PrivateKey = nil
+	err := AddUID(key, "Extra", "", "extra@example.com")
+	if err == nil {
+		t.Fatal("expected error with nil private key")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 10. SubkeyInfo formatting
+// ---------------------------------------------------------------------------
+
+func TestSubkeyInfo(t *testing.T) {
+	key := genEd25519(t, "InfoTest", "info@example.com")
+	if len(key.Subkeys) == 0 {
+		t.Fatal("expected at least one subkey")
+	}
+
+	info := SubkeyInfo(key.Subkeys[0])
+	if !strings.Contains(info, "sub:") {
+		t.Errorf("SubkeyInfo should contain 'sub:', got %q", info)
+	}
+	if !strings.Contains(info, "[encrypt]") {
+		t.Errorf("default subkey should have [encrypt] flag, got %q", info)
 	}
 }

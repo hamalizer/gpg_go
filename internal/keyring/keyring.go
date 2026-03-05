@@ -193,17 +193,16 @@ func (kr *Keyring) DeletePublicKey(identifier string) error {
 	kr.mu.Lock()
 	defer kr.mu.Unlock()
 
-	// Resolve identifier (email, name, etc.) to actual key ID
 	entity := findKey(kr.pubKeys, identifier)
 	if entity == nil {
 		return fmt.Errorf("public key not found: %s", identifier)
 	}
-	keyID := entity.PrimaryKey.KeyIdString()
+	fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
 
-	if err := kr.store.DeleteKey(keyID, false); err != nil {
+	if err := kr.store.DeleteKey(fp, false); err != nil {
 		return err
 	}
-	kr.pubKeys = removeKey(kr.pubKeys, keyID)
+	kr.pubKeys = removeKey(kr.pubKeys, fp)
 	return nil
 }
 
@@ -211,17 +210,16 @@ func (kr *Keyring) DeleteSecretKey(identifier string) error {
 	kr.mu.Lock()
 	defer kr.mu.Unlock()
 
-	// Resolve identifier (email, name, etc.) to actual key ID
 	entity := findKey(kr.secKeys, identifier)
 	if entity == nil {
 		return fmt.Errorf("secret key not found: %s", identifier)
 	}
-	keyID := entity.PrimaryKey.KeyIdString()
+	fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
 
-	if err := kr.store.DeleteKey(keyID, true); err != nil {
+	if err := kr.store.DeleteKey(fp, true); err != nil {
 		return err
 	}
-	kr.secKeys = removeKey(kr.secKeys, keyID)
+	kr.secKeys = removeKey(kr.secKeys, fp)
 	return nil
 }
 

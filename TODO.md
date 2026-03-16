@@ -50,10 +50,26 @@ Active work items for gpg-go. Check items off and move to CHANGELOG.md when done
 
 ## Remaining Audit Findings
 
-### Low Priority (from R1/R2 audits, not yet addressed)
-- [ ] L-02: Error messages leak internal filesystem paths
-- [ ] L-03: TrustDB has no integrity protection (no MAC/signature)
-- [ ] L-04: `readPassphrase()` falls back to insecure line-reading on non-TTY
+Cross-referenced from three audit passes: R0 (initial crypto audit), R1, and R2.
+
+### High Priority (still open)
+- [ ] H5/R0: Decrypted plaintext never zeroed — `DecryptResult.Plaintext` stays in heap indefinitely, can be paged to swap. Zero after use or use `mlock()`.
+
+### Medium Priority (still open)
+- [ ] M1/R0: Silent errors on key loading — `store.go:176` silently `continue`s on corrupt `.asc` files. No file size limit on `os.ReadFile` (OOM on multi-GB file). Add size cap + log warning.
+- [ ] M2/R0: No self-signature verification on key import — `ImportKey` relies on go-crypto's parsing but never explicitly validates self-signatures. Forged UIDs could be imported.
+- [ ] M3/R0: Keyserver fetch has no key validation — keys added directly from HKP response with no fingerprint confirmation or prompt.
+- [ ] M4/R0: Non-atomic file writes — `store.go` uses `os.WriteFile` directly. Crash during write = truncated key file. Use write-to-temp + fsync + rename.
+- [ ] M5/R0: S2K weakness for symmetric encryption — OpenPGP iterated+salted S2K with SHA-256 is weaker than Argon2/scrypt against GPU brute-force. Protocol limitation, but iteration count should be maximized.
+
+### Low Priority (still open)
+- [ ] L-02/R1: Error messages leak internal filesystem paths
+- [ ] L-03/R1: TrustDB has no integrity protection (no MAC/signature)
+- [ ] L-04/R1: `readPassphrase()` falls back to insecure line-reading on non-TTY
+- [ ] L1/R0: `PromptFunc` decrypts private key in-place — key stays decrypted in memory for process lifetime. Lower risk now that keys are S2K-encrypted at rest.
+- [ ] L2/R0: RSA-2048 still offered as keygen option — only 112-bit security. Ed25519 is default but RSA-2048 should show a deprecation warning.
+- [ ] L3/R0: No algorithm preference lists in generated keys — `PreferredHash`, `PreferredCipher`, `PreferredCompression` not set. Other OpenPGP implementations may choose suboptimal algorithms.
+- [ ] L5/R0: No file-level locking for concurrent access — `sync.RWMutex` protects in-memory state but two gpg-go processes on same `~/.gpg-go` can race on disk.
 - [ ] R2-L-02: Keyserver refresh has no rate limiting or backoff
 - [ ] R2-L-03: Trust model is cosmetic — not enforced in crypto operations
 - [ ] R2-L-04: GUI dropdowns stale after key operations

@@ -2,6 +2,10 @@
 
 ## v0.3.0 — Hardening
 
+- [ ] Zero decrypted plaintext after use (H5/R0 — heap/swap exposure)
+- [ ] Atomic file writes for key storage (write-to-temp + fsync + rename)
+- [ ] File size cap on key loading to prevent OOM on malicious `.asc` files
+- [ ] Log warnings on corrupt/unreadable key files instead of silent skip
 - [ ] Enforce trust model in cryptographic operations (encrypt/verify respect trust levels)
 - [ ] Rate-limit keyserver refresh (backoff, concurrency cap, per-key progress)
 - [ ] GUI state refresh after key operations (encrypt/sign dropdowns stay in sync)
@@ -11,6 +15,9 @@
 - [ ] TrustDB integrity protection (MAC or signature over trust entries)
 - [ ] Pin S2K parameters explicitly in symmetric encryption config
 - [ ] Warn on empty/weak passphrases for symmetric encryption
+- [ ] Set algorithm preference lists on generated keys (PreferredHash, PreferredCipher, PreferredCompression)
+- [ ] Deprecation warning when generating RSA-2048 keys
+- [ ] File-level locking for concurrent `~/.gpg-go` access
 
 ## v0.4.0 — Key Lifecycle
 
@@ -19,6 +26,8 @@
 - [ ] Subkey revocation (individual subkey without revoking primary)
 - [ ] Key expiry extension (update expiry on existing keys)
 - [ ] Certify other users' keys (key signing)
+- [ ] Self-signature verification on key import
+- [ ] Keyserver fetch validation (fingerprint confirmation prompt)
 
 ## v0.5.0 — Interoperability
 

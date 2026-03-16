@@ -54,6 +54,8 @@ Cross-referenced from three audit passes: R0 (initial crypto audit), R1, and R2.
 
 ### High Priority (still open)
 - [ ] H5/R0: Decrypted plaintext never zeroed — `DecryptResult.Plaintext` stays in heap indefinitely, can be paged to swap. Zero after use or use `mlock()`.
+- [ ] C3/R0 (partial): Verify does not check if signing key is expired — signatures from expired keys are silently accepted. Add expiry check to `verify.go`.
+- [ ] C2/R0 (partial): Trust model bypassed for verify and decrypt — `cli/encrypt.go` warns on untrusted recipients but `cli/verify.go` and `cli/decrypt.go` never consult trustdb.
 
 ### Medium Priority (still open)
 - [ ] M1/R0: Silent errors on key loading — `store.go:176` silently `continue`s on corrupt `.asc` files. No file size limit on `os.ReadFile` (OOM on multi-GB file). Add size cap + log warning.

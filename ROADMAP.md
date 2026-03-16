@@ -6,7 +6,8 @@
 - [ ] Atomic file writes for key storage (write-to-temp + fsync + rename)
 - [ ] File size cap on key loading to prevent OOM on malicious `.asc` files
 - [ ] Log warnings on corrupt/unreadable key files instead of silent skip
-- [ ] Enforce trust model in cryptographic operations (encrypt/verify respect trust levels)
+- [ ] Enforce trust model in verify and decrypt (encrypt already warns on untrusted recipients)
+- [ ] Reject or warn on signatures from expired keys in verify.go
 - [ ] Rate-limit keyserver refresh (backoff, concurrency cap, per-key progress)
 - [ ] GUI state refresh after key operations (encrypt/sign dropdowns stay in sync)
 - [ ] Warn or refuse `hkp://` (plaintext HTTP) keyserver connections without `--allow-insecure`

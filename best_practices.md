@@ -77,11 +77,14 @@ checked, what's fixed, and what patterns to watch for going forward.
 - C1/R0 (keys unencrypted at rest): FIXED. `s2kSerializeConfig()` now passed to
   `SerializePrivate` everywhere (store.go:73, keyring.go:271,279). Config sets
   SHA256 + AES256 for S2K derivation.
-- C2/R0 = R2-L-03 (trust model): NOT FIXED. trustdb.go exists, SetTrust/GetTrust
-  work, but encrypt.go and verify.go never consult it. AllKeys() returns everything.
-  Tracked in roadmap v0.3.0.
-- C3/R0 = R1-C01 (key expiry): FIXED. Expiry logic checks `*KeyLifetimeSecs > 0`.
-  Tests exist (TestExpiredKeyRejection_*). Deduplicated check.
+- C2/R0 = R2-L-03 (trust model): PARTIALLY FIXED. cli/encrypt.go:82-95 checks
+  trust levels and warns about untrusted recipients. But cli/verify.go and
+  cli/decrypt.go never consult trustdb at all. Trust is advisory in encrypt,
+  completely absent in verify/decrypt. Tracked in roadmap v0.3.0.
+- C3/R0 = R1-C01 (key expiry): PARTIALLY FIXED. Expiry logic checks
+  `*KeyLifetimeSecs > 0`. Tests exist for encrypt/sign rejection. BUT verify.go
+  does NOT check if signing key is expired — signatures from expired keys are
+  silently accepted as "Good signature". decrypt.go also doesn't check.
 - H1/R0 (findKey 64-bit ID): PARTIALLY FIXED. findKey rewritten with 4-pass:
   fingerprint → exact email → exact name → unique substring. First pass still
   matches on KeyIdString (64-bit) alongside full fingerprint. 64-bit is better

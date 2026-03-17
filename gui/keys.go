@@ -16,6 +16,7 @@ import (
 
 func (a *App) buildKeysTab() fyne.CanvasObject {
 	keyList := widget.NewList(
+
 		func() int {
 			return len(a.getAllKeys())
 		},
@@ -48,6 +49,8 @@ func (a *App) buildKeysTab() fyne.CanvasObject {
 				entity.PrimaryKey.CreationTime.Format("2006-01-02")))
 		},
 	)
+
+	a.keyList = keyList // R2-L-04: Store reference for cross-tab refresh
 
 	detailBox := widget.NewMultiLineEntry()
 	detailBox.Wrapping = fyne.TextWrapWord
@@ -86,7 +89,25 @@ func (a *App) buildKeysTab() fyne.CanvasObject {
 		a.showDeleteDialog(keyList)
 	})
 
-	toolbar := container.NewHBox(generateBtn, importBtn, exportBtn, deleteBtn, layout.NewSpacer())
+	addSubkeyBtn := widget.NewButton("Add Subkey", func() {
+		secKeys := a.kr.SecretKeys()
+		if len(secKeys) == 0 {
+			dialog.ShowInformation("Add Subkey", "No secret keys available.", a.window)
+			return
+		}
+		a.showAddSubkeyDialog()
+	})
+
+	addUIDBtn := widget.NewButton("Add UID", func() {
+		secKeys := a.kr.SecretKeys()
+		if len(secKeys) == 0 {
+			dialog.ShowInformation("Add UID", "No secret keys available.", a.window)
+			return
+		}
+		a.showAddUIDDialog()
+	})
+
+	toolbar := container.NewHBox(generateBtn, importBtn, exportBtn, deleteBtn, addSubkeyBtn, addUIDBtn, layout.NewSpacer())
 	detail := container.NewVScroll(detailBox)
 	detail.SetMinSize(fyne.NewSize(400, 200))
 
@@ -234,7 +255,7 @@ func (a *App) showGenerateDialog(keyList *widget.List) {
 					return
 				}
 
-				keyList.Refresh()
+				a.refreshKeyWidgets()
 				dialog.ShowInformation("Success",
 					fmt.Sprintf("Key generated!\n\n%s", keyring.KeyInfo(entity)),
 					a.window)
@@ -266,7 +287,7 @@ func (a *App) showImportDialog(keyList *widget.List) {
 				return
 			}
 
-			keyList.Refresh()
+			a.refreshKeyWidgets()
 			dialog.ShowInformation("Imported",
 				fmt.Sprintf("Imported %d key(s)", len(imported)),
 				a.window)
@@ -322,6 +343,188 @@ func (a *App) showExportDialog() {
 	d.Show()
 }
 
+func (a *App) showAddSubkeyDialog() {
+	secKeys := a.kr.SecretKeys()
+	options := keyOptionStrings(secKeys)
+
+	keySel := widget.NewSelect(options, nil)
+	keySel.SetSelectedIndex(0)
+
+	typeSel := widget.NewSelect([]string{"Encryption", "Signing"}, nil)
+	typeSel.SetSelectedIndex(0)
+
+	passphraseEntry := widget.NewPasswordEntry()
+	passphraseEntry.SetPlaceHolder("Passphrase (if key is protected)")
+
+	d := dialog.NewForm("Add Subkey", "Add", "Cancel",
+		[]*widget.FormItem{
+			widget.NewFormItem("Key", keySel),
+			widget.NewFormItem("Type", typeSel),
+			widget.NewFormItem("Passphrase", passphraseEntry),
+		},
+		func(ok bool) {
+			if !ok {
+				return
+			}
+
+			idx := keySel.SelectedIndex()
+			if idx < 0 || idx >= len(secKeys) {
+				return
+			}
+			entity := secKeys[idx]
+			passphrase := []byte(passphraseEntry.Text)
+			passphraseEntry.SetText("")
+
+			var skType crypto.SubkeyType
+			if typeSel.SelectedIndex() == 1 {
+				skType = crypto.SubkeySigning
+			} else {
+				skType = crypto.SubkeyEncryption
+			}
+
+			go func() {
+				defer func() {
+					for i := range passphrase {
+						passphrase[i] = 0
+					}
+				}()
+
+				if keyring.IsEntityKeyEncrypted(entity) {
+					if len(passphrase) == 0 {
+						dialog.ShowError(fmt.Errorf("key is passphrase-protected"), a.window)
+						return
+					}
+					if err := keyring.DecryptEntityKeys(entity, passphrase); err != nil {
+						dialog.ShowError(fmt.Errorf("unlock key: %w", err), a.window)
+						return
+					}
+				}
+
+				if err := crypto.AddSubkey(entity, skType, 0, nil); err != nil {
+					dialog.ShowError(fmt.Errorf("add subkey: %w", err), a.window)
+					return
+				}
+
+				if len(passphrase) > 0 {
+					if err := keyring.EncryptEntityKeys(entity, passphrase); err != nil {
+						dialog.ShowError(fmt.Errorf("re-encrypt keys: %w", err), a.window)
+						return
+					}
+				}
+
+				if err := a.kr.UpdateEntity(entity); err != nil {
+					dialog.ShowError(fmt.Errorf("save key: %w", err), a.window)
+					return
+				}
+
+				a.refreshKeyWidgets()
+				dialog.ShowInformation("Success",
+					fmt.Sprintf("Subkey added!\n\n%s", keyring.KeyInfo(entity)),
+					a.window)
+			}()
+		},
+		a.window,
+	)
+	d.Resize(fyne.NewSize(450, 300))
+	d.Show()
+}
+
+func (a *App) showAddUIDDialog() {
+	secKeys := a.kr.SecretKeys()
+	options := keyOptionStrings(secKeys)
+
+	keySel := widget.NewSelect(options, nil)
+	keySel.SetSelectedIndex(0)
+
+	nameEntry := widget.NewEntry()
+	nameEntry.SetPlaceHolder("Full Name")
+	emailEntry := widget.NewEntry()
+	emailEntry.SetPlaceHolder("email@example.com")
+	commentEntry := widget.NewEntry()
+	commentEntry.SetPlaceHolder("(optional)")
+	passphraseEntry := widget.NewPasswordEntry()
+	passphraseEntry.SetPlaceHolder("Passphrase (if key is protected)")
+
+	d := dialog.NewForm("Add User ID", "Add", "Cancel",
+		[]*widget.FormItem{
+			widget.NewFormItem("Key", keySel),
+			widget.NewFormItem("Name", nameEntry),
+			widget.NewFormItem("Email", emailEntry),
+			widget.NewFormItem("Comment", commentEntry),
+			widget.NewFormItem("Passphrase", passphraseEntry),
+		},
+		func(ok bool) {
+			if !ok {
+				return
+			}
+
+			idx := keySel.SelectedIndex()
+			if idx < 0 || idx >= len(secKeys) {
+				return
+			}
+			entity := secKeys[idx]
+			name := strings.TrimSpace(nameEntry.Text)
+			email := strings.TrimSpace(emailEntry.Text)
+			comment := strings.TrimSpace(commentEntry.Text)
+			passphrase := []byte(passphraseEntry.Text)
+			passphraseEntry.SetText("")
+
+			if name == "" || email == "" {
+				dialog.ShowError(fmt.Errorf("name and email are required"), a.window)
+				return
+			}
+			if !strings.Contains(email, "@") {
+				dialog.ShowError(fmt.Errorf("invalid email address"), a.window)
+				return
+			}
+
+			go func() {
+				defer func() {
+					for i := range passphrase {
+						passphrase[i] = 0
+					}
+				}()
+
+				if keyring.IsEntityKeyEncrypted(entity) {
+					if len(passphrase) == 0 {
+						dialog.ShowError(fmt.Errorf("key is passphrase-protected"), a.window)
+						return
+					}
+					if err := keyring.DecryptEntityKeys(entity, passphrase); err != nil {
+						dialog.ShowError(fmt.Errorf("unlock key: %w", err), a.window)
+						return
+					}
+				}
+
+				if err := crypto.AddUID(entity, name, comment, email); err != nil {
+					dialog.ShowError(fmt.Errorf("add UID: %w", err), a.window)
+					return
+				}
+
+				if len(passphrase) > 0 {
+					if err := keyring.EncryptEntityKeys(entity, passphrase); err != nil {
+						dialog.ShowError(fmt.Errorf("re-encrypt keys: %w", err), a.window)
+						return
+					}
+				}
+
+				if err := a.kr.UpdateEntity(entity); err != nil {
+					dialog.ShowError(fmt.Errorf("save key: %w", err), a.window)
+					return
+				}
+
+				a.refreshKeyWidgets()
+				dialog.ShowInformation("Success",
+					fmt.Sprintf("UID added!\n\n%s", keyring.KeyInfo(entity)),
+					a.window)
+			}()
+		},
+		a.window,
+	)
+	d.Resize(fyne.NewSize(450, 350))
+	d.Show()
+}
+
 func (a *App) showDeleteDialog(keyList *widget.List) {
 	// Take a fresh snapshot of keys at dialog open time
 	allKeys := a.getAllKeys()
@@ -362,7 +565,7 @@ func (a *App) showDeleteDialog(keyList *widget.List) {
 					if len(errs) > 0 {
 						dialog.ShowError(fmt.Errorf("delete errors: %s", strings.Join(errs, "; ")), a.window)
 					}
-					keyList.Refresh()
+					a.refreshKeyWidgets()
 				},
 				a.window,
 			)

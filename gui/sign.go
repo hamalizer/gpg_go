@@ -24,6 +24,7 @@ func (a *App) buildSignTab() fyne.CanvasObject {
 	signOutput.SetMinRowsVisible(8)
 
 	signerSelect := widget.NewSelect(a.getSecretKeyOptions(), nil)
+	a.signerSelect = signerSelect // R2-L-04: Store reference for cross-tab refresh
 	if len(a.kr.SecretKeys()) > 0 {
 		signerSelect.SetSelectedIndex(0)
 	}
@@ -52,26 +53,55 @@ func (a *App) buildSignTab() fyne.CanvasObject {
 			}
 		}
 
-		params := crypto.SignParams{
-			Signer: signer,
-			Armor:  true,
+		doSign := func() {
+			params := crypto.SignParams{
+				Signer: signer,
+				Armor:  true,
+			}
+
+			switch signTypeSelect.SelectedIndex() {
+			case 0:
+				params.Detached = true
+			case 1:
+				params.Cleartext = true
+			case 2:
+				// inline
+			}
+
+			result, err := crypto.Sign(strings.NewReader(signInput.Text), params)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("signing failed: %w", err), a.window)
+				return
+			}
+			signOutput.SetText(string(result))
 		}
 
-		switch signTypeSelect.SelectedIndex() {
-		case 0:
-			params.Detached = true
-		case 1:
-			params.Cleartext = true
-		case 2:
-			// inline
-		}
-
-		result, err := crypto.Sign(strings.NewReader(signInput.Text), params)
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("signing failed: %w", err), a.window)
+		// If the signing key is passphrase-protected, prompt for it
+		if keyring.IsEntityKeyEncrypted(signer) {
+			passEntry := widget.NewPasswordEntry()
+			passEntry.SetPlaceHolder("Enter passphrase to unlock signing key")
+			dialog.ShowForm("Passphrase Required", "Unlock", "Cancel",
+				[]*widget.FormItem{widget.NewFormItem("Passphrase", passEntry)},
+				func(ok bool) {
+					if !ok {
+						return
+					}
+					pass := []byte(passEntry.Text)
+					defer func() {
+						for i := range pass {
+							pass[i] = 0
+						}
+					}()
+					if err := keyring.DecryptEntityKeys(signer, pass); err != nil {
+						dialog.ShowError(fmt.Errorf("wrong passphrase: %w", err), a.window)
+						return
+					}
+					doSign()
+				}, a.window)
 			return
 		}
-		signOutput.SetText(string(result))
+
+		doSign()
 	})
 
 	signSection := container.NewVBox(
@@ -105,7 +135,7 @@ func (a *App) buildSignTab() fyne.CanvasObject {
 		result, err := crypto.VerifyDetached(
 			strings.NewReader(verifyMsg.Text),
 			strings.NewReader(verifySig.Text),
-			a.kr.AllKeys(),
+			a.kr.PublicKeys(),
 		)
 		if err != nil {
 			dialog.ShowError(err, a.window)
@@ -127,7 +157,7 @@ func (a *App) buildSignTab() fyne.CanvasObject {
 
 		result, plaintext, err := crypto.VerifyInline(
 			bytes.NewReader([]byte(verifySig.Text)),
-			a.kr.AllKeys(),
+			a.kr.PublicKeys(),
 		)
 		if err != nil {
 			dialog.ShowError(err, a.window)

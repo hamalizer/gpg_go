@@ -100,3 +100,149 @@ func GenerateKey(params KeyGenParams) (*openpgp.Entity, error) {
 
 	return entity, nil
 }
+
+// AddSubkey generates and adds a new subkey to an existing entity.
+// The entity's primary private key must be decrypted before calling this.
+// If passphrase is non-nil, the new subkey will be encrypted with it.
+func AddSubkey(entity *openpgp.Entity, subkeyType SubkeyType, lifetime time.Duration, passphrase []byte) error {
+	if entity.PrivateKey == nil {
+		return fmt.Errorf("entity has no private key")
+	}
+	if entity.PrivateKey.Encrypted {
+		return fmt.Errorf("primary key must be decrypted first")
+	}
+
+	cfg := &packet.Config{
+		DefaultHash:   gocrypto.SHA256,
+		DefaultCipher: packet.CipherAES256,
+	}
+	if lifetime > 0 {
+		secs := uint32(lifetime.Seconds())
+		cfg.KeyLifetimeSecs = secs
+	}
+
+	// Match the algorithm family of the primary key
+	switch entity.PrimaryKey.PubKeyAlgo {
+	case 1, 2, 3: // RSA
+		cfg.Algorithm = packet.PubKeyAlgoRSA
+		if bl, err := entity.PrimaryKey.BitLength(); err == nil {
+			cfg.RSABits = int(bl)
+		} else {
+			cfg.RSABits = 4096
+		}
+	default:
+		cfg.Algorithm = packet.PubKeyAlgoEdDSA
+	}
+
+	switch subkeyType {
+	case SubkeyEncryption:
+		if err := entity.AddEncryptionSubkey(cfg); err != nil {
+			return fmt.Errorf("add encryption subkey: %w", err)
+		}
+	case SubkeySigning:
+		if err := entity.AddSigningSubkey(cfg); err != nil {
+			return fmt.Errorf("add signing subkey: %w", err)
+		}
+	default:
+		return fmt.Errorf("unknown subkey type: %d", subkeyType)
+	}
+
+	// Encrypt the new subkey if passphrase provided
+	if len(passphrase) > 0 {
+		newSub := &entity.Subkeys[len(entity.Subkeys)-1]
+		if newSub.PrivateKey != nil {
+			if err := newSub.PrivateKey.Encrypt(passphrase); err != nil {
+				return fmt.Errorf("encrypt new subkey: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// SubkeyType indicates the purpose of a subkey.
+type SubkeyType int
+
+const (
+	SubkeyEncryption SubkeyType = iota
+	SubkeySigning
+)
+
+func (t SubkeyType) String() string {
+	switch t {
+	case SubkeyEncryption:
+		return "encryption"
+	case SubkeySigning:
+		return "signing"
+	default:
+		return "unknown"
+	}
+}
+
+// AddUID adds a new user ID to an existing entity.
+// The entity's primary private key must be decrypted before calling this.
+func AddUID(entity *openpgp.Entity, name, comment, email string) error {
+	if entity.PrivateKey == nil {
+		return fmt.Errorf("entity has no private key")
+	}
+	if entity.PrivateKey.Encrypted {
+		return fmt.Errorf("primary key must be decrypted first")
+	}
+
+	cfg := &packet.Config{
+		DefaultHash:   gocrypto.SHA256,
+		DefaultCipher: packet.CipherAES256,
+	}
+
+	if err := entity.AddUserId(name, comment, email, cfg); err != nil {
+		return fmt.Errorf("add UID: %w", err)
+	}
+	return nil
+}
+
+// SubkeyInfo returns a human-readable summary of a subkey.
+func SubkeyInfo(sub openpgp.Subkey) string {
+	pk := sub.PublicKey
+	algo := "unknown"
+	bits := ""
+
+	if bl, err := pk.BitLength(); err == nil && bl > 0 {
+		bits = fmt.Sprintf("%d", bl)
+	}
+
+	switch pk.PubKeyAlgo {
+	case 1, 2, 3:
+		algo = "RSA"
+	case 18:
+		algo = "ECDH"
+	case 22:
+		algo = "EdDSA"
+		if bits == "" {
+			bits = "256"
+		}
+	case 25:
+		algo = "X25519"
+		if bits == "" {
+			bits = "256"
+		}
+	}
+
+	usage := ""
+	if sub.Sig != nil {
+		if sub.Sig.FlagEncryptStorage || sub.Sig.FlagEncryptCommunications {
+			usage = "[encrypt]"
+		}
+		if sub.Sig.FlagSign {
+			usage = "[sign]"
+		}
+	}
+
+	created := pk.CreationTime.Format("2006-01-02")
+	expiry := ""
+	if sub.Sig != nil && sub.Sig.KeyLifetimeSecs != nil && *sub.Sig.KeyLifetimeSecs > 0 {
+		exp := pk.CreationTime.Add(time.Duration(*sub.Sig.KeyLifetimeSecs) * time.Second)
+		expiry = fmt.Sprintf(" [expires %s]", exp.Format("2006-01-02"))
+	}
+
+	return fmt.Sprintf("  sub: %s%s/%s %s %s%s", algo, bits, pk.KeyIdString(), created, usage, expiry)
+}

@@ -31,15 +31,20 @@ func newSignCmd() *cobra.Command {
 
 			signer := kr.FindSecretKey(localUser)
 			if signer == nil {
-				// Try first secret key if none specified
+				if localUser != "" {
+					return fmt.Errorf("secret key not found: %s", localUser)
+				}
+				// No -u specified: use the most recently created secret key
+				// for deterministic behavior regardless of filesystem ordering.
 				secKeys := kr.SecretKeys()
 				if len(secKeys) == 0 {
 					return fmt.Errorf("no secret key available for signing")
 				}
-				if localUser == "" {
-					signer = secKeys[0]
-				} else {
-					return fmt.Errorf("secret key not found: %s", localUser)
+				signer = secKeys[0]
+				for _, k := range secKeys[1:] {
+					if k.PrimaryKey.CreationTime.After(signer.PrimaryKey.CreationTime) {
+						signer = k
+					}
 				}
 			}
 

@@ -14,6 +14,20 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
+// sanitizeError replaces the user's home directory in error messages with "~"
+// to avoid leaking internal filesystem paths in error output (L-02).
+func sanitizeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	home, herr := os.UserHomeDir()
+	if herr != nil || home == "" {
+		return err
+	}
+	msg := strings.ReplaceAll(err.Error(), home, "~")
+	return fmt.Errorf("%s", msg)
+}
+
 // Store handles persisting keys to disk.
 type Store struct {
 	pubDir string
@@ -25,7 +39,7 @@ func NewStore(pubDir, secDir string) *Store {
 }
 
 func (s *Store) SavePublicKey(entity *openpgp.Entity) error {
-	fp := entity.PrimaryKey.KeyIdString()
+	fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
 	path := filepath.Join(s.pubDir, fp+".asc")
 
 	var buf bytes.Buffer
@@ -41,11 +55,14 @@ func (s *Store) SavePublicKey(entity *openpgp.Entity) error {
 		return fmt.Errorf("finalize armor: %w", err)
 	}
 
-	return os.WriteFile(path, buf.Bytes(), 0600)
+	if err := os.WriteFile(path, buf.Bytes(), 0600); err != nil {
+		return sanitizeError(err)
+	}
+	return nil
 }
 
 func (s *Store) SavePrivateKey(entity *openpgp.Entity) error {
-	fp := entity.PrimaryKey.KeyIdString()
+	fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
 	path := filepath.Join(s.secDir, fp+".asc")
 
 	var buf bytes.Buffer
@@ -61,7 +78,10 @@ func (s *Store) SavePrivateKey(entity *openpgp.Entity) error {
 		return fmt.Errorf("finalize armor: %w", err)
 	}
 
-	return os.WriteFile(path, buf.Bytes(), 0600)
+	if err := os.WriteFile(path, buf.Bytes(), 0600); err != nil {
+		return sanitizeError(err)
+	}
+	return nil
 }
 
 func (s *Store) LoadPublicKeys() (openpgp.EntityList, error) {
@@ -80,7 +100,7 @@ func (s *Store) DeleteKey(keyID string, private bool) error {
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return err
+		return sanitizeError(err)
 	}
 
 	// Normalize key ID for matching
@@ -91,7 +111,7 @@ func (s *Store) DeleteKey(keyID string, private bool) error {
 		name := strings.TrimSuffix(entry.Name(), ".asc")
 		if strings.EqualFold(name, keyID) {
 			if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
-				return err
+				return sanitizeError(err)
 			}
 			deleted = true
 		}
@@ -118,7 +138,16 @@ func (s *Store) loadKeysFromDir(dir string) (openpgp.EntityList, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, sanitizeError(err)
+	}
+
+	// L-01: Check directory permissions. Secret key directories should be 0700.
+	if info, err := os.Stat(dir); err == nil {
+		perm := info.Mode().Perm()
+		if perm&0077 != 0 {
+			fmt.Fprintf(os.Stderr, "WARNING: directory %s has permissive permissions (%04o), should be 0700\n",
+				filepath.Base(dir), perm)
+		}
 	}
 
 	var entities openpgp.EntityList
@@ -127,7 +156,18 @@ func (s *Store) loadKeysFromDir(dir string) (openpgp.EntityList, error) {
 			continue
 		}
 
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		filePath := filepath.Join(dir, entry.Name())
+
+		// L-01: Check individual key file permissions
+		if info, err := entry.Info(); err == nil {
+			perm := info.Mode().Perm()
+			if perm&0077 != 0 {
+				fmt.Fprintf(os.Stderr, "WARNING: key file %s has permissive permissions (%04o), should be 0600\n",
+					entry.Name(), perm)
+			}
+		}
+
+		data, err := os.ReadFile(filePath)
 		if err != nil {
 			continue
 		}

@@ -30,7 +30,7 @@ make gui    # GUI (needs OpenGL dev libs)
 
 ### Build Dependencies
 
-- Go 1.22+
+- Go 1.24+
 - GUI only: `libgl-dev`, `xorg-dev` (Linux), Xcode (macOS)
 
 ## Quick Start

@@ -25,6 +25,7 @@ func (a *App) buildEncryptTab() fyne.CanvasObject {
 	outputEntry.SetMinRowsVisible(8)
 
 	recipientSelect := widget.NewCheckGroup(a.getKeyOptions(), nil)
+	a.recipientCheck = recipientSelect // R2-L-04: Store reference for cross-tab refresh
 
 	armorCheck := widget.NewCheck("ASCII Armor", nil)
 	armorCheck.SetChecked(true)

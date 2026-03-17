@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -25,14 +26,22 @@ type Client struct {
 
 func NewClient(serverURL string) *Client {
 	// Handle HKP-specific URI schemes (RFC 7929)
+	insecure := false
 	if strings.HasPrefix(serverURL, "hkps://") {
 		serverURL = "https://" + strings.TrimPrefix(serverURL, "hkps://")
 	} else if strings.HasPrefix(serverURL, "hkp://") {
 		serverURL = "http://" + strings.TrimPrefix(serverURL, "hkp://")
-	} else if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
+		insecure = true
+	} else if strings.HasPrefix(serverURL, "http://") {
+		insecure = true
+	} else if !strings.HasPrefix(serverURL, "https://") {
 		serverURL = "https://" + serverURL
 	}
 	serverURL = strings.TrimRight(serverURL, "/")
+
+	if insecure {
+		fmt.Fprintf(os.Stderr, "WARNING: keyserver connection is not encrypted (%s). Keys may be tampered with in transit.\n", serverURL)
+	}
 
 	return &Client{
 		BaseURL: serverURL,

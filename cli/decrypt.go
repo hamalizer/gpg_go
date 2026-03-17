@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/hamalizer/gpg_go/internal/crypto"
+	"github.com/hamalizer/gpg_go/internal/keyring"
 	"github.com/spf13/cobra"
 )
 
@@ -24,21 +25,30 @@ func newDecryptCmd() *cobra.Command {
 
 			allKeys := kr.AllKeys()
 
-			result, err := crypto.Decrypt(bytes.NewReader(input), allKeys, nil)
-			if err != nil {
-				// May need passphrase
+			// Always prompt for passphrase if any secret key is encrypted,
+			// to avoid a timing oracle that distinguishes protected vs unprotected keys.
+			var passphrase []byte
+			hasEncrypted := false
+			for _, entity := range kr.SecretKeys() {
+				if keyring.IsEntityKeyEncrypted(entity) {
+					hasEncrypted = true
+					break
+				}
+			}
+			if hasEncrypted {
 				fmt.Fprint(os.Stderr, "Passphrase: ")
-				passphrase, pErr := readPassphrase()
+				var pErr error
+				passphrase, pErr = readPassphrase()
 				if pErr != nil {
 					return fmt.Errorf("read passphrase: %w", pErr)
 				}
 				fmt.Fprintln(os.Stderr)
 				defer zeroBytes(passphrase)
+			}
 
-				result, err = crypto.Decrypt(bytes.NewReader(input), allKeys, passphrase)
-				if err != nil {
-					return fmt.Errorf("decryption failed: %w", err)
-				}
+			result, err := crypto.Decrypt(bytes.NewReader(input), allKeys, passphrase)
+			if err != nil {
+				return fmt.Errorf("decryption failed: %w", err)
 			}
 
 			if verbose && result.IsSigned {

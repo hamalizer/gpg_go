@@ -71,11 +71,20 @@ func (kr *Keyring) AllKeys() openpgp.EntityList {
 	return all
 }
 
-func (kr *Keyring) ImportKey(armoredKey io.Reader) ([]*openpgp.Entity, error) {
-	entities, err := openpgp.ReadArmoredKeyRing(armoredKey)
+func (kr *Keyring) ImportKey(keyData io.Reader) ([]*openpgp.Entity, error) {
+	// Buffer the input so we can retry with binary format if armored fails
+	data, err := io.ReadAll(keyData)
+	if err != nil {
+		return nil, fmt.Errorf("read key data: %w", err)
+	}
+
+	entities, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(data))
 	if err != nil {
 		// Try binary format as fallback
-		return nil, fmt.Errorf("read key: %w", err)
+		entities, err = openpgp.ReadKeyRing(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("read key (tried armored and binary): %w", err)
+		}
 	}
 
 	kr.mu.Lock()
@@ -140,6 +149,23 @@ func (kr *Keyring) AddEntity(entity *openpgp.Entity) error {
 	return nil
 }
 
+// UpdateEntity re-saves an existing entity to disk. Use this after modifying
+// a key (e.g. adding subkeys or UIDs) so the changes are persisted.
+func (kr *Keyring) UpdateEntity(entity *openpgp.Entity) error {
+	kr.mu.Lock()
+	defer kr.mu.Unlock()
+
+	if entity.PrivateKey != nil {
+		if err := kr.store.SavePrivateKey(entity); err != nil {
+			return err
+		}
+	}
+	if err := kr.store.SavePublicKey(entity); err != nil {
+		return err
+	}
+	return nil
+}
+
 // hasKeyLocked checks if a key with the given fingerprint exists in the list.
 // Caller must hold kr.mu.
 func (kr *Keyring) hasKeyLocked(keys openpgp.EntityList, fingerprint string) bool {
@@ -167,17 +193,16 @@ func (kr *Keyring) DeletePublicKey(identifier string) error {
 	kr.mu.Lock()
 	defer kr.mu.Unlock()
 
-	// Resolve identifier (email, name, etc.) to actual key ID
 	entity := findKey(kr.pubKeys, identifier)
 	if entity == nil {
 		return fmt.Errorf("public key not found: %s", identifier)
 	}
-	keyID := entity.PrimaryKey.KeyIdString()
+	fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
 
-	if err := kr.store.DeleteKey(keyID, false); err != nil {
+	if err := kr.store.DeleteKey(fp, false); err != nil {
 		return err
 	}
-	kr.pubKeys = removeKey(kr.pubKeys, keyID)
+	kr.pubKeys = removeKey(kr.pubKeys, fp)
 	return nil
 }
 
@@ -185,17 +210,16 @@ func (kr *Keyring) DeleteSecretKey(identifier string) error {
 	kr.mu.Lock()
 	defer kr.mu.Unlock()
 
-	// Resolve identifier (email, name, etc.) to actual key ID
 	entity := findKey(kr.secKeys, identifier)
 	if entity == nil {
 		return fmt.Errorf("secret key not found: %s", identifier)
 	}
-	keyID := entity.PrimaryKey.KeyIdString()
+	fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
 
-	if err := kr.store.DeleteKey(keyID, true); err != nil {
+	if err := kr.store.DeleteKey(fp, true); err != nil {
 		return err
 	}
-	kr.secKeys = removeKey(kr.secKeys, keyID)
+	kr.secKeys = removeKey(kr.secKeys, fp)
 	return nil
 }
 
@@ -311,8 +335,51 @@ func KeyInfo(entity *openpgp.Entity) string {
 	for _, uid := range uids {
 		info += fmt.Sprintf("  uid: %s\n", uid)
 	}
-	info += fmt.Sprintf("  fingerprint: %s", fingerprint)
-	return info
+	info += fmt.Sprintf("  fingerprint: %s\n", fingerprint)
+	for _, sub := range entity.Subkeys {
+		subAlgo := "unknown"
+		subBits := ""
+		if bl, err := sub.PublicKey.BitLength(); err == nil && bl > 0 {
+			subBits = fmt.Sprintf("%d", bl)
+		}
+		switch sub.PublicKey.PubKeyAlgo {
+		case 1, 2, 3:
+			subAlgo = "RSA"
+		case 18:
+			subAlgo = "ECDH"
+		case 22:
+			subAlgo = "EdDSA"
+			if subBits == "" {
+				subBits = "256"
+			}
+		case 25:
+			subAlgo = "X25519"
+			if subBits == "" {
+				subBits = "256"
+			}
+		}
+		usage := ""
+		if sub.Sig != nil {
+			if sub.Sig.FlagEncryptStorage || sub.Sig.FlagEncryptCommunications {
+				usage = " [encrypt]"
+			}
+			if sub.Sig.FlagSign {
+				usage = " [sign]"
+			}
+		}
+		subCreated := sub.PublicKey.CreationTime.Format("2006-01-02")
+		subExpiry := ""
+		if sub.Sig != nil && sub.Sig.KeyLifetimeSecs != nil && *sub.Sig.KeyLifetimeSecs > 0 {
+			exp := sub.PublicKey.CreationTime.Add(time.Duration(*sub.Sig.KeyLifetimeSecs) * time.Second)
+			subExpiry = fmt.Sprintf(" [expires %s]", exp.Format("2006-01-02"))
+		}
+		revoked := ""
+		if len(sub.Revocations) > 0 {
+			revoked = " [REVOKED]"
+		}
+		info += fmt.Sprintf("  sub: %s%s/%s %s%s%s%s\n", subAlgo, subBits, sub.PublicKey.KeyIdString(), subCreated, usage, subExpiry, revoked)
+	}
+	return strings.TrimRight(info, "\n")
 }
 
 // SortedUIDs returns identity names in deterministic order.
@@ -349,16 +416,45 @@ func findKey(keys openpgp.EntityList, identifier string) *openpgp.Entity {
 		}
 	}
 
-	// Second pass: collect ALL UID matches and return only if exactly one key matches.
-	// This prevents ambiguous substring matches from silently selecting the wrong key.
-	seen := make(map[string]*openpgp.Entity) // fingerprint → entity (dedup)
+	// Second pass: exact email match (preferred over substring)
 	lowerID := strings.ToLower(identifier)
+	for _, entity := range keys {
+		for _, id := range entity.Identities {
+			// Extract email from UID format "Name (Comment) <email>"
+			name := id.Name
+			if emailStart := strings.LastIndex(name, "<"); emailStart >= 0 {
+				if emailEnd := strings.LastIndex(name, ">"); emailEnd > emailStart {
+					email := strings.ToLower(name[emailStart+1 : emailEnd])
+					if email == lowerID {
+						return entity
+					}
+				}
+			}
+		}
+	}
+
+	// Third pass: exact name match
+	for _, entity := range keys {
+		for _, id := range entity.Identities {
+			name := id.Name
+			// Strip email portion for name comparison
+			if idx := strings.LastIndex(name, "<"); idx > 0 {
+				name = strings.TrimSpace(name[:idx])
+			}
+			if strings.EqualFold(name, identifier) {
+				return entity
+			}
+		}
+	}
+
+	// Fourth pass: substring match, but only if exactly one key matches.
+	seen := make(map[string]*openpgp.Entity)
 	for _, entity := range keys {
 		for _, id := range entity.Identities {
 			if strings.Contains(strings.ToLower(id.Name), lowerID) {
 				fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
 				seen[fp] = entity
-				break // don't count the same entity twice
+				break
 			}
 		}
 	}
@@ -367,7 +463,6 @@ func findKey(keys openpgp.EntityList, identifier string) *openpgp.Entity {
 			return entity
 		}
 	}
-	// If 0 or >1 match, return nil — callers should use fingerprints for disambiguation
 	return nil
 }
 
@@ -426,7 +521,7 @@ func IsEntityKeyEncrypted(entity *openpgp.Entity) bool {
 // (including when no expiration is set).
 func IsKeyExpired(entity *openpgp.Entity) bool {
 	for _, id := range entity.Identities {
-		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil {
+		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil && *id.SelfSignature.KeyLifetimeSecs > 0 {
 			expiry := entity.PrimaryKey.CreationTime.Add(
 				time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second,
 			)
@@ -436,13 +531,13 @@ func IsKeyExpired(entity *openpgp.Entity) bool {
 			return false // found a valid self-sig with expiry, not expired
 		}
 	}
-	return false // no expiration set
+	return false // no expiration set (or lifetime is 0, meaning no expiry)
 }
 
 // KeyExpiry returns the expiration time of a key, or zero time if none is set.
 func KeyExpiry(entity *openpgp.Entity) time.Time {
 	for _, id := range entity.Identities {
-		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil {
+		if id.SelfSignature != nil && id.SelfSignature.KeyLifetimeSecs != nil && *id.SelfSignature.KeyLifetimeSecs > 0 {
 			return entity.PrimaryKey.CreationTime.Add(
 				time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second,
 			)
